@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FLASHTICKER 7" – Web Installer</title>
+  <script type="module" src="https://unpkg.com/esp-web-tools@10/dist/web/install-button.js"></script>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0A0A10;
+      color: #FFFFFF;
+      font-family: 'Segoe UI', Arial, sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 40px 16px;
+    }
+
+    .logo-wrap {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      margin-bottom: 8px;
+    }
+
+    .logo-wrap img {
+      width: 80px;
+      height: 80px;
+      object-fit: contain;
+    }
+
+    h1 {
+      font-size: 2.8rem;
+      font-weight: 800;
+      color: #F7931A;
+      letter-spacing: 2px;
+    }
+
+    .badge {
+      background: #1A1A2E;
+      border: 1px solid #F7931A44;
+      color: #F7931A;
+      font-size: 0.85rem;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin-bottom: 32px;
+    }
+
+    .card {
+      background: #0F0F1E;
+      border: 1px solid #1E1E3A;
+      border-radius: 16px;
+      padding: 32px;
+      max-width: 640px;
+      width: 100%;
+      margin-bottom: 24px;
+    }
+
+    .card h2 {
+      color: #F7931A;
+      font-size: 1.1rem;
+      margin-bottom: 16px;
+      text-transform: uppercase;
+      letter-spacing: 1px;
+    }
+
+    .card p {
+      color: #AAAAAA;
+      line-height: 1.7;
+      margin-bottom: 12px;
+    }
+
+    .features {
+      list-style: none;
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .features li {
+      color: #CCCCCC;
+      font-size: 0.9rem;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .features li::before {
+      content: "⚡";
+      color: #F7931A;
+    }
+
+    .install-wrap {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 16px;
+      padding: 8px 0;
+    }
+
+    esp-web-install-button {
+      --esp-tools-button-color: #F7931A;
+      --esp-tools-button-text-color: #000000;
+    }
+
+    .browser-note {
+      color: #666;
+      font-size: 0.8rem;
+      text-align: center;
+    }
+
+    .browser-note a {
+      color: #F7931A;
+    }
+
+    .steps {
+      counter-reset: step;
+      list-style: none;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+    }
+
+    .steps li {
+      counter-increment: step;
+      display: flex;
+      align-items: flex-start;
+      gap: 14px;
+      color: #CCCCCC;
+      font-size: 0.95rem;
+      line-height: 1.5;
+    }
+
+    .steps li::before {
+      content: counter(step);
+      background: #F7931A;
+      color: #000;
+      font-weight: 700;
+      font-size: 0.8rem;
+      width: 24px;
+      height: 24px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+      margin-top: 2px;
+    }
+
+    .steps li strong {
+      color: #FFFFFF;
+    }
+
+    footer {
+      color: #444;
+      font-size: 0.8rem;
+      margin-top: 16px;
+      text-align: center;
+    }
+
+    footer a { color: #F7931A; text-decoration: none; }
+  </style>
+</head>
+<body>
+
+  <div class="logo-wrap">
+    <img src="pictures/Flashman.png" alt="Flashman Logo" />
+    <h1>FLASHTICKER</h1>
+  </div>
+  <div class="badge">v1.0 · ESP32-S3 · Elecrow CrowPanel 7.0"</div>
+
+  <!-- Beschreibung -->
+  <div class="card">
+    <h2>Was ist FLASHTICKER 7"?</h2>
+    <p>
+      Bitcoin · Gold · Silber Preisticker für das Elecrow CrowPanel 7.0.
+      Einfach per USB verbinden, flashen, WLAN konfigurieren – fertig.
+    </p>
+    <ul class="features">
+      <li>BTC / Gold / Silber live</li>
+      <li>USD · EUR · CHF</li>
+      <li>oz &amp; Gramm Anzeige</li>
+      <li>24h Kursänderung %</li>
+      <li>Touch Währungswechsel</li>
+      <li>NTP Uhrzeit + Datum</li>
+      <li>WiFiManager Portal</li>
+      <li>5min stilles Refresh</li>
+    </ul>
+  </div>
+
+  <!-- Installer -->
+  <div class="card">
+    <h2>Firmware installieren</h2>
+    <div class="install-wrap">
+      <esp-web-install-button manifest="manifest.json">
+        <button slot="activate">⚡ FLASHTICKER installieren</button>
+        <span slot="unsupported">
+          Dein Browser unterstützt kein Web Serial.<br/>
+          Bitte nutze <a href="https://www.google.com/chrome/" target="_blank">Chrome</a> oder
+          <a href="https://www.microsoft.com/edge" target="_blank">Edge</a>.
+        </span>
+      </esp-web-install-button>
+      <p class="browser-note">
+        Erfordert Chrome oder Edge · USB-Kabel · Kein Treiber nötig
+      </p>
+    </div>
+  </div>
+
+  <!-- Anleitung -->
+  <div class="card">
+    <h2>Einrichtung</h2>
+    <ol class="steps">
+      <li><strong>USB verbinden</strong> – CrowPanel per USB-C an deinen Computer.</li>
+      <li><strong>Installieren klicken</strong> – Gerät im Browser-Dialog auswählen und bestätigen.</li>
+      <li><strong>Warten</strong> – Firmware wird geflasht, Board startet neu (ca. 30 Sek.).</li>
+      <li><strong>WLAN einrichten</strong> – Mit Hotspot <code>FLASHTICKER</code> (PW: <code>flashticker</code>) verbinden, Browser öffnet sich automatisch.</li>
+      <li><strong>Fertig</strong> – Kurse werden geladen, Touch wechselt Währungsmodus.</li>
+    </ol>
+  </div>
+
+  <footer>
+    <a href="https://github.com/FlashmanBTC/flashticker_7zoll" target="_blank">GitHub</a> ·
+    MIT License · Made by FlashmanBTC
+  </footer>
+
+</body>
+</html>
