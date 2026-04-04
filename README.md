@@ -1,0 +1,1 @@
+# flashticker_7zoll
