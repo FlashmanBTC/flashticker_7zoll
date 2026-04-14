@@ -6,6 +6,21 @@
 //
 //  CHANGELOG
 //  ---------------------------------------------------------
+//  v3.1 (2026-04-14)
+//    - Loading Screen: lv_bar statt manuellem Resize (Balken füllt sich korrekt)
+//    - Kein Flash mehr zwischen Bootscreen und Loading Screen
+//    - %-Anzeige: 20pt, unterhalb des Balkens
+//    - Hintergrund-Refresh (5 Min) ohne Loading Screen
+//    - Bug Fix: Bottom-Cards korrekt bei Silber/Gold als Boot-Default
+//
+//  v3.0 (2026-04-14)
+//    - Einstellungen-Screen (Zahnrad im Header)
+//    - Boot-Defaults per Touch konfigurierbar:
+//      Standard Asset, Waehrung, Chart-Periode, Vollbild
+//    - Einstellungen werden in NVS (Flash) gespeichert
+//    - Version "v3.0" auf Bootscreen und im Einstellungen-Header
+//    - Period-Button Highlight Fix: zeigt gespeicherte Default-Periode
+//
 //  v2.0 (2026-04-14)
 //    - Eigene API: ticker.blitzi.me (kein CoinGecko/Binance)
 //    - Keine Rate-Limit Delays mehr beim API-Abruf
@@ -27,6 +42,7 @@
 // ============================================================
 
 #define LGFX_USE_V1
+#define FW_VERSION "3.1"
 #include <Arduino.h>
 #include "Flashman_logo.h"
 #include <LovyanGFX.hpp>
@@ -43,6 +59,7 @@
 #include <Wire.h>
 #include <PCA9557.h>
 #include <driver/i2c.h>
+#include <Preferences.h>
 
 LV_FONT_DECLARE(lv_font_montserrat_64);
 LV_FONT_DECLARE(lv_font_montserrat_72);
@@ -107,6 +124,7 @@ public:
 
 LGFX tft;
 PCA9557 Out;
+Preferences prefs;
 
 // ============================================================
 //  LVGL Draw-Buffer (in PSRAM um SRAM für WiFi/TLS freizugeben)
@@ -198,6 +216,12 @@ Asset g_active_asset = ASSET_BTC;
 Asset g_b1_asset     = ASSET_GOLD;
 Asset g_b2_asset     = ASSET_SILVER;
 
+// Boot-Defaults (NVS gespeichert, gelten ab naechstem Start)
+uint8_t g_def_asset      = 0;  // 0=BTC, 1=Gold, 2=Silber
+uint8_t g_def_currency   = 0;  // 0=EUR, 1=CHF, 2=USD
+uint8_t g_def_period     = 0;  // 0=1T,  1=1W,  2=1M
+bool    g_def_fullscreen = false;
+
 // ============================================================
 //  Forward declarations
 // ============================================================
@@ -208,8 +232,13 @@ void fetch_all_charts(uint8_t period);
 void set_active_asset(Asset a);
 void show_boot_screen();
 void show_wifi_screen();
+void show_settings_screen(lv_obj_t *prev_scr);
+void show_loading_screen();
+void update_loading(int pct, const char *msg);
 void toggle_fullscreen();
 void update_fs_highlow();
+void load_settings();
+void save_settings();
 
 // ============================================================
 //  LVGL UI – Referenzen
@@ -230,6 +259,12 @@ lv_obj_t *lbl_b2_icon, *lbl_b2_price, *lbl_b2_sub, *lbl_b2_chg;
 
 // Vollbild-Modus
 bool      g_fullscreen   = false;
+lv_obj_t *g_main_scr     = nullptr;
+
+// Loading-Screen Referenzen
+static lv_obj_t *g_load_fill = nullptr;
+static lv_obj_t *g_load_msg  = nullptr;
+static lv_obj_t *g_load_pct  = nullptr;
 lv_obj_t *g_top_card     = nullptr;
 lv_obj_t *g_b1_card      = nullptr;
 lv_obj_t *g_b2_card      = nullptr;
@@ -283,7 +318,9 @@ static lv_obj_t* make_card(lv_obj_t *parent, int x, int y, int w, int h,
 }
 
 void create_ui() {
-  lv_obj_t *scr = lv_scr_act();
+  // Neuen Screen erstellen ohne ihn zu laden – bleibt im Hintergrund bis lv_scr_load()
+  lv_obj_t *scr = lv_obj_create(NULL);
+  g_main_scr = scr;
   lv_obj_set_style_bg_color(scr, lv_color_hex(0x0A0A10), 0);
   lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
 
@@ -310,6 +347,23 @@ void create_ui() {
   lv_obj_set_style_text_color(lbl_date, lv_color_hex(0x888888), 0);
   lv_obj_set_style_text_font(lbl_date, &lv_font_montserrat_14, 0);
   lv_obj_align(lbl_date, LV_ALIGN_RIGHT_MID, -16, 12);
+
+  // Zahnrad-Button (Einstellungen)
+  lv_obj_t *btn_gear = lv_btn_create(hdr);
+  lv_obj_set_size(btn_gear, 40, 40);
+  lv_obj_align(btn_gear, LV_ALIGN_LEFT_MID, 230, 0);
+  lv_obj_set_style_radius(btn_gear, 6, 0);
+  lv_obj_set_style_pad_all(btn_gear, 0, 0);
+  lv_obj_set_style_bg_color(btn_gear, lv_color_hex(0x1A1A2E), 0);
+  lv_obj_set_style_bg_color(btn_gear, lv_color_hex(0x2A2A40), LV_STATE_PRESSED);
+  lv_obj_set_style_border_width(btn_gear, 0, 0);
+  lv_obj_t *lbl_gear = lv_label_create(btn_gear);
+  lv_label_set_text(lbl_gear, LV_SYMBOL_SETTINGS);
+  lv_obj_set_style_text_color(lbl_gear, lv_color_hex(0x555566), 0);
+  lv_obj_center(lbl_gear);
+  lv_obj_add_event_cb(btn_gear, [](lv_event_t *e) {
+    show_settings_screen(lv_scr_act());
+  }, LV_EVENT_CLICKED, NULL);
 
   // ---------- TOP CARD (y=61, h=197) – dynamisches Asset ----------
   g_top_card = make_card(scr, 0, 61, SCR_W, 197);
@@ -350,13 +404,13 @@ void create_ui() {
     lv_obj_set_pos(g_btn_period[i], 24 + i * 50, 162);
     lv_obj_set_style_radius(g_btn_period[i], 4, 0);
     lv_obj_set_style_pad_all(g_btn_period[i], 0, 0);
-    lv_obj_set_style_bg_color(g_btn_period[i], i == 0 ? lv_color_hex(0x2A2A40) : lv_color_hex(0x1A1A28), 0);
+    lv_obj_set_style_bg_color(g_btn_period[i], i == (int)g_chart_period ? lv_color_hex(0x2A2A40) : lv_color_hex(0x1A1A28), 0);
     lv_obj_set_style_border_color(g_btn_period[i], lv_color_hex(0x3A3A55), 0);
     lv_obj_set_style_border_width(g_btn_period[i], 1, 0);
     lv_obj_t *lbl = lv_label_create(g_btn_period[i]);
     lv_label_set_text(lbl, period_labels[i]);
     lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(lbl, i == 0 ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x666677), 0);
+    lv_obj_set_style_text_color(lbl, i == (int)g_chart_period ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x666677), 0);
     lv_obj_center(lbl);
     int period_idx = i;
     lv_obj_add_event_cb(g_btn_period[i], [](lv_event_t *e) {
@@ -902,6 +956,13 @@ void show_boot_screen() {
   lv_obj_set_style_text_font(lbl_sub, &lv_font_montserrat_20, 0);
   lv_obj_align(lbl_sub, LV_ALIGN_CENTER, 0, 118);
 
+  // Version
+  lv_obj_t *lbl_version = lv_label_create(scr);
+  lv_label_set_text(lbl_version, "v" FW_VERSION);
+  lv_obj_set_style_text_color(lbl_version, lv_color_hex(0x444455), 0);
+  lv_obj_set_style_text_font(lbl_version, &lv_font_montserrat_20, 0);
+  lv_obj_align(lbl_version, LV_ALIGN_CENTER, 0, 150);
+
   // Made with love
   lv_obj_t *lbl_ver = lv_label_create(scr);
   lv_label_set_text(lbl_ver, "Made with love by Flashman");
@@ -1003,6 +1064,286 @@ void show_wifi_screen() {
 
   lv_scr_load(scr);
   lv_timer_handler();
+}
+
+// ============================================================
+//  Loading-Screen (wird über Haupt-UI gelegt während Daten laden)
+// ============================================================
+void show_loading_screen() {
+  lv_obj_t *scr = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x0A0A10), 0);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+
+  // Orange Linie oben (wie Bootscreen)
+  lv_obj_t *bar = lv_obj_create(scr);
+  lv_obj_set_pos(bar, 0, 0);
+  lv_obj_set_size(bar, SCR_W, 6);
+  lv_obj_set_style_bg_color(bar, lv_color_hex(0xF7931A), 0);
+  lv_obj_set_style_border_width(bar, 0, 0);
+  lv_obj_set_style_radius(bar, 0, 0);
+  lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
+
+  // Logo
+  lv_obj_t *img = lv_img_create(scr);
+  lv_img_set_src(img, &flashman_logo_img);
+  lv_obj_align(img, LV_ALIGN_CENTER, 0, -90);
+
+  // Titel
+  lv_obj_t *lbl_logo = lv_label_create(scr);
+  lv_label_set_text(lbl_logo, "FLASHTICKER");
+  lv_obj_set_style_text_color(lbl_logo, lv_color_hex(0xF7931A), 0);
+  lv_obj_set_style_text_font(lbl_logo, &lv_font_montserrat_48, 0);
+  lv_obj_align(lbl_logo, LV_ALIGN_CENTER, 0, 55);
+
+  // Status-Meldung (wird via update_loading gesetzt)
+  g_load_msg = lv_label_create(scr);
+  lv_label_set_text(g_load_msg, "Starte...");
+  lv_obj_set_style_text_color(g_load_msg, lv_color_hex(0x777788), 0);
+  lv_obj_set_style_text_font(g_load_msg, &lv_font_montserrat_18, 0);
+  lv_obj_align(g_load_msg, LV_ALIGN_CENTER, 0, 108);
+
+  // Progress-Bar (lv_bar – LVGL-native, füllt sich korrekt)
+  g_load_fill = lv_bar_create(scr);
+  lv_obj_set_pos(g_load_fill, 100, 385);
+  lv_obj_set_size(g_load_fill, 600, 14);
+  lv_bar_set_range(g_load_fill, 0, 100);
+  lv_bar_set_value(g_load_fill, 0, LV_ANIM_OFF);
+  // Hintergrund (Track)
+  lv_obj_set_style_bg_color(g_load_fill, lv_color_hex(0x1A1A2E), LV_PART_MAIN);
+  lv_obj_set_style_bg_opa(g_load_fill, LV_OPA_COVER, LV_PART_MAIN);
+  lv_obj_set_style_radius(g_load_fill, 7, LV_PART_MAIN);
+  lv_obj_set_style_border_width(g_load_fill, 0, LV_PART_MAIN);
+  // Füllfarbe (Indicator)
+  lv_obj_set_style_bg_color(g_load_fill, lv_color_hex(0xF7931A), LV_PART_INDICATOR);
+  lv_obj_set_style_bg_opa(g_load_fill, LV_OPA_COVER, LV_PART_INDICATOR);
+  lv_obj_set_style_radius(g_load_fill, 7, LV_PART_INDICATOR);
+
+  // Prozent-Anzeige (unterhalb des Balkens)
+  g_load_pct = lv_label_create(scr);
+  lv_label_set_text(g_load_pct, "0%");
+  lv_obj_set_style_text_color(g_load_pct, lv_color_hex(0x777788), 0);
+  lv_obj_set_style_text_font(g_load_pct, &lv_font_montserrat_20, 0);
+  lv_obj_align(g_load_pct, LV_ALIGN_CENTER, 0, 175);
+
+  lv_scr_load(scr);
+  lv_timer_handler();
+}
+
+void update_loading(int pct, const char *msg) {
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
+  if (g_load_fill) lv_bar_set_value(g_load_fill, pct, LV_ANIM_OFF);
+  if (g_load_msg)  lv_label_set_text(g_load_msg, msg);
+  if (g_load_pct) {
+    char buf[8];
+    snprintf(buf, sizeof(buf), "%d%%", pct);
+    lv_label_set_text(g_load_pct, buf);
+  }
+  lv_timer_handler();
+}
+
+// ============================================================
+//  NVS Settings: laden / speichern
+// ============================================================
+void load_settings() {
+  prefs.begin("flashticker", true);
+  g_def_asset      = prefs.getUChar("def_asset",    0);
+  g_def_currency   = prefs.getUChar("def_currency", 0);
+  g_def_period     = prefs.getUChar("def_period",   0);
+  g_def_fullscreen = prefs.getBool ("def_fs",       false);
+  prefs.end();
+  // Bounds-Check
+  if (g_def_asset    > 2) g_def_asset    = 0;
+  if (g_def_currency > 2) g_def_currency = 0;
+  if (g_def_period   > 2) g_def_period   = 0;
+  // Auf Runtime-Globals anwenden
+  g_active_asset = (Asset)g_def_asset;
+  g_cur          = (Currency)g_def_currency;
+  g_chart_period = g_def_period;
+  // Bottom-Cards: die anderen zwei Assets in fixer Reihenfolge
+  const Asset all3[] = {ASSET_BTC, ASSET_GOLD, ASSET_SILVER};
+  int bi = 0;
+  Asset bottom[2];
+  for (int i = 0; i < 3; i++) {
+    if (all3[i] != g_active_asset) bottom[bi++] = all3[i];
+  }
+  g_b1_asset = bottom[0];
+  g_b2_asset = bottom[1];
+}
+
+void save_settings() {
+  prefs.begin("flashticker", false);
+  prefs.putUChar("def_asset",    g_def_asset);
+  prefs.putUChar("def_currency", g_def_currency);
+  prefs.putUChar("def_period",   g_def_period);
+  prefs.putBool ("def_fs",       g_def_fullscreen);
+  prefs.end();
+}
+
+// ============================================================
+//  Einstellungen-Screen
+// ============================================================
+static lv_obj_t *s_asset_btns[3];
+static lv_obj_t *s_cur_btns[3];
+static lv_obj_t *s_period_btns[3];
+static lv_obj_t *s_fs_btns[2];
+
+static void settings_highlight(lv_obj_t **btns, int count, int active) {
+  for (int i = 0; i < count; i++) {
+    bool on = (i == active);
+    lv_obj_set_style_bg_color(btns[i],
+      on ? lv_color_hex(0x2A2A40) : lv_color_hex(0x111120), 0);
+    lv_obj_set_style_border_color(btns[i],
+      on ? lv_color_hex(0xF7931A) : lv_color_hex(0x3A3A55), 0);
+    lv_obj_set_style_text_color(lv_obj_get_child(btns[i], 0),
+      on ? lv_color_hex(0xF7931A) : lv_color_hex(0x555566), 0);
+  }
+}
+
+void show_settings_screen(lv_obj_t *prev_scr) {
+  lv_obj_t *scr = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(scr, lv_color_hex(0x0A0A10), 0);
+  lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, 0);
+
+  // Header
+  lv_obj_t *hdr = make_card(scr, 0, 0, SCR_W, 60);
+
+  lv_obj_t *btn_back = lv_btn_create(hdr);
+  lv_obj_set_size(btn_back, 110, 40);
+  lv_obj_align(btn_back, LV_ALIGN_LEFT_MID, 10, 0);
+  lv_obj_set_style_radius(btn_back, 6, 0);
+  lv_obj_set_style_pad_all(btn_back, 0, 0);
+  lv_obj_set_style_bg_color(btn_back, lv_color_hex(0x1A1A2E), 0);
+  lv_obj_set_style_border_width(btn_back, 0, 0);
+  lv_obj_t *lbl_b = lv_label_create(btn_back);
+  lv_label_set_text(lbl_b, LV_SYMBOL_LEFT "  Zurueck");
+  lv_obj_set_style_text_color(lbl_b, lv_color_hex(0xF7931A), 0);
+  lv_obj_set_style_text_font(lbl_b, &lv_font_montserrat_14, 0);
+  lv_obj_center(lbl_b);
+  lv_obj_add_event_cb(btn_back, [](lv_event_t *e) {
+    lv_obj_t *prev = (lv_obj_t*)lv_event_get_user_data(e);
+    lv_scr_load(prev);
+  }, LV_EVENT_CLICKED, prev_scr);
+
+  lv_obj_t *lbl_title = lv_label_create(hdr);
+  lv_label_set_text(lbl_title, "EINSTELLUNGEN");
+  lv_obj_set_style_text_color(lbl_title, lv_color_hex(0xF7931A), 0);
+  lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_28, 0);
+  lv_obj_align(lbl_title, LV_ALIGN_CENTER, 0, 0);
+
+  lv_obj_t *lbl_ver = lv_label_create(hdr);
+  lv_label_set_text(lbl_ver, "v" FW_VERSION);
+  lv_obj_set_style_text_color(lbl_ver, lv_color_hex(0x444455), 0);
+  lv_obj_set_style_text_font(lbl_ver, &lv_font_montserrat_14, 0);
+  lv_obj_align(lbl_ver, LV_ALIGN_RIGHT_MID, -16, 0);
+
+  // Helper: Settings-Button erstellen
+  auto make_sbtn = [](lv_obj_t *parent, const char *text,
+                      lv_align_t align, int x_ofs, bool active) -> lv_obj_t* {
+    lv_obj_t *btn = lv_btn_create(parent);
+    lv_obj_set_size(btn, 96, 46);
+    lv_obj_align(btn, align, x_ofs, 0);
+    lv_obj_set_style_radius(btn, 6, 0);
+    lv_obj_set_style_pad_all(btn, 0, 0);
+    lv_obj_set_style_bg_color(btn, active ? lv_color_hex(0x2A2A40) : lv_color_hex(0x111120), 0);
+    lv_obj_set_style_border_color(btn, active ? lv_color_hex(0xF7931A) : lv_color_hex(0x3A3A55), 0);
+    lv_obj_set_style_border_width(btn, 1, 0);
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_label_set_text(lbl, text);
+    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_color(lbl, active ? lv_color_hex(0xF7931A) : lv_color_hex(0x555566), 0);
+    lv_obj_center(lbl);
+    return btn;
+  };
+
+  // Zeile 0: Standard Asset
+  lv_obj_t *row0 = make_card(scr, 40, 75, 720, 82, 0x0F0F1E, true, false);
+  lv_obj_set_style_radius(row0, 8, 0);
+  lv_obj_t *lbl0 = lv_label_create(row0);
+  lv_label_set_text(lbl0, "Standard Asset");
+  lv_obj_set_style_text_color(lbl0, lv_color_hex(0xAAAAAA), 0);
+  lv_obj_set_style_text_font(lbl0, &lv_font_montserrat_18, 0);
+  lv_obj_align(lbl0, LV_ALIGN_LEFT_MID, 20, 0);
+  const char *asset_labels[] = {"BTC", "GOLD", "SILBER"};
+  for (int i = 0; i < 3; i++) {
+    s_asset_btns[i] = make_sbtn(row0, asset_labels[i],
+      LV_ALIGN_RIGHT_MID, -16 - (2-i)*106, i == (int)g_def_asset);
+    lv_obj_add_event_cb(s_asset_btns[i], [](lv_event_t *e) {
+      uint8_t idx = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+      g_def_asset = idx;
+      save_settings();
+      settings_highlight(s_asset_btns, 3, idx);
+    }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
+  }
+
+  // Zeile 1: Waehrung
+  lv_obj_t *row1 = make_card(scr, 40, 170, 720, 82, 0x0F0F1E, true, false);
+  lv_obj_set_style_radius(row1, 8, 0);
+  lv_obj_t *lbl1 = lv_label_create(row1);
+  lv_label_set_text(lbl1, "Waehrung");
+  lv_obj_set_style_text_color(lbl1, lv_color_hex(0xAAAAAA), 0);
+  lv_obj_set_style_text_font(lbl1, &lv_font_montserrat_18, 0);
+  lv_obj_align(lbl1, LV_ALIGN_LEFT_MID, 20, 0);
+  const char *cur_labels[] = {"EUR", "CHF", "USD"};
+  for (int i = 0; i < 3; i++) {
+    s_cur_btns[i] = make_sbtn(row1, cur_labels[i],
+      LV_ALIGN_RIGHT_MID, -16 - (2-i)*106, i == (int)g_def_currency);
+    lv_obj_add_event_cb(s_cur_btns[i], [](lv_event_t *e) {
+      uint8_t idx = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+      g_def_currency = idx;
+      save_settings();
+      settings_highlight(s_cur_btns, 3, idx);
+    }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
+  }
+
+  // Zeile 2: Chart Periode
+  lv_obj_t *row2 = make_card(scr, 40, 265, 720, 82, 0x0F0F1E, true, false);
+  lv_obj_set_style_radius(row2, 8, 0);
+  lv_obj_t *lbl2 = lv_label_create(row2);
+  lv_label_set_text(lbl2, "Chart Periode");
+  lv_obj_set_style_text_color(lbl2, lv_color_hex(0xAAAAAA), 0);
+  lv_obj_set_style_text_font(lbl2, &lv_font_montserrat_18, 0);
+  lv_obj_align(lbl2, LV_ALIGN_LEFT_MID, 20, 0);
+  const char *period_labels[] = {"1T", "1W", "1M"};
+  for (int i = 0; i < 3; i++) {
+    s_period_btns[i] = make_sbtn(row2, period_labels[i],
+      LV_ALIGN_RIGHT_MID, -16 - (2-i)*106, i == (int)g_def_period);
+    lv_obj_add_event_cb(s_period_btns[i], [](lv_event_t *e) {
+      uint8_t idx = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+      g_def_period = idx;
+      save_settings();
+      settings_highlight(s_period_btns, 3, idx);
+    }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
+  }
+
+  // Zeile 3: Vollbild Start
+  lv_obj_t *row3 = make_card(scr, 40, 360, 720, 82, 0x0F0F1E, true, false);
+  lv_obj_set_style_radius(row3, 8, 0);
+  lv_obj_t *lbl3 = lv_label_create(row3);
+  lv_label_set_text(lbl3, "Vollbild Start");
+  lv_obj_set_style_text_color(lbl3, lv_color_hex(0xAAAAAA), 0);
+  lv_obj_set_style_text_font(lbl3, &lv_font_montserrat_18, 0);
+  lv_obj_align(lbl3, LV_ALIGN_LEFT_MID, 20, 0);
+  const char *fs_labels[] = {"AN", "AUS"};
+  for (int i = 0; i < 2; i++) {
+    s_fs_btns[i] = make_sbtn(row3, fs_labels[i],
+      LV_ALIGN_RIGHT_MID, -16 - (1-i)*106, i == (g_def_fullscreen ? 0 : 1));
+    lv_obj_add_event_cb(s_fs_btns[i], [](lv_event_t *e) {
+      uint8_t idx = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+      g_def_fullscreen = (idx == 0);
+      save_settings();
+      settings_highlight(s_fs_btns, 2, idx);
+    }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
+  }
+
+  // Hinweis unten
+  lv_obj_t *lbl_note = lv_label_create(scr);
+  lv_label_set_text(lbl_note, LV_SYMBOL_SAVE "  Einstellungen werden sofort gespeichert und gelten ab dem naechsten Start.");
+  lv_obj_set_style_text_color(lbl_note, lv_color_hex(0x444455), 0);
+  lv_obj_set_style_text_font(lbl_note, &lv_font_montserrat_14, 0);
+  lv_obj_align(lbl_note, LV_ALIGN_BOTTOM_MID, 0, -16);
+
+  lv_scr_load(scr);
 }
 
 // ============================================================
@@ -1178,6 +1519,11 @@ void setup() {
   idrv.read_cb = lv_touch_cb;
   lv_indev_drv_register(&idrv);
 
+  // NVS-Settings laden (vor Boot-Screen damit Defaults korrekt gesetzt sind)
+  load_settings();
+  Serial.printf("Settings: asset=%d cur=%d period=%d fs=%d\n",
+                g_def_asset, g_def_currency, g_def_period, g_def_fullscreen);
+
   // Boot-Screen anzeigen
   show_boot_screen();
 
@@ -1196,35 +1542,32 @@ void setup() {
   lv_scr_load(blank);
   lv_timer_handler();
 
-  // Haupt-UI laden
+  // Haupt-UI im Hintergrund aufbauen (wird erst nach dem Laden sichtbar)
   Serial.println("create_ui...");
-  create_ui();
+  create_ui();  // setzt g_main_scr intern, kein lv_scr_load
   lv_timer_handler();
 
   if (WiFi.status() == WL_CONNECTED) {
     Serial.printf("WLAN: %s\n", WiFi.SSID().c_str());
 
-    // DNS braucht kurz nach Verbindungsaufbau
-    lv_label_set_text(lbl_status, "WLAN OK - warte auf DNS...");
-    lv_timer_handler();
-    delay(2000);
+    // Loading-Screen anzeigen (Hauptscreen im Hintergrund)
+    show_loading_screen();
 
-    // Explizit Google DNS setzen als Fallback
+    // DNS-Wartezeit
+    update_loading(5, "WLAN OK - warte auf DNS...");
+    delay(2000);
     WiFi.config(WiFi.localIP(), WiFi.gatewayIP(), WiFi.subnetMask(),
                 IPAddress(8,8,8,8));
     delay(500);
 
-    // NTP sync (UTC+2 für CEST)
-    lv_label_set_text(lbl_status, "Uhrzeit wird synchronisiert...");
-    lv_timer_handler();
+    // NTP sync
+    update_loading(12, "Uhrzeit synchronisieren...");
     ntpClient.setTimeOffset(7200);
     ntpClient.begin();
     ntpClient.forceUpdate();
 
     // Kurse laden (bis zu 3 Versuche)
-    lv_label_set_text(lbl_status, "Lade Kurse...");
-    lv_timer_handler();
-
+    update_loading(20, "Lade Kurse...");
     for (int attempt = 1; attempt <= 3; attempt++) {
       Serial.printf("API Versuch %d/3...\n", attempt);
       if (fetchPrices()) {
@@ -1233,9 +1576,6 @@ void setup() {
         snprintf(g_last_update, sizeof(g_last_update),
                  "%02d:%02d", ntpClient.getHours(), ntpClient.getMinutes());
         Serial.println("Preise geladen!");
-        fetch_all_charts(0);  // 1T Charts für alle Assets
-        fetch_all_charts(1);  // 1W Charts für alle Assets
-        fetch_all_charts(2);  // 1M Charts für alle Assets
         break;
       }
       if (attempt < 3) {
@@ -1244,14 +1584,43 @@ void setup() {
       }
     }
 
+    // Charts laden: 9 Fetches (3 Assets × 3 Perioden), Fortschritt 25% → 95%
+    if (g_data_ok) {
+      const int total = NUM_ASSETS * NUM_PERIODS;
+      int done = 0;
+      for (uint8_t period = 0; period < NUM_PERIODS; period++) {
+        for (int a = 0; a < NUM_ASSETS; a++) {
+          char msg[40];
+          snprintf(msg, sizeof(msg), "Lade Charts: %d / %d", done + 1, total);
+          update_loading(25 + (done * 70) / total, msg);
+          fetch_chart_asset((Asset)a, period);
+          lv_timer_handler();
+          done++;
+        }
+      }
+    }
+
+    // Fertig – kurz anzeigen, dann Hauptscreen
+    update_loading(100, "Bereit!");
+    lv_timer_handler();
+    delay(700);
+
+    // Vollbild-Default anwenden BEVOR wir zurückwechseln
+    if (g_def_fullscreen) toggle_fullscreen();
+
+    lv_scr_load(g_main_scr);
+    lv_timer_handler();
+
+    // Hauptscreen mit geladenen Daten befüllen
     update_prices();
+    update_chart_series();
     char sbuf[48];
     if (g_data_ok)
       snprintf(sbuf, sizeof(sbuf), "Aktualisiert: %s Uhr", g_last_update);
     else
-      snprintf(sbuf, sizeof(sbuf), "Kein API-Zugriff – naechster Versuch in 5 Min.");
+      snprintf(sbuf, sizeof(sbuf), "Kein API-Zugriff - naechster Versuch in 5 Min.");
     lv_label_set_text(lbl_status, sbuf);
-    lv_obj_invalidate(lv_scr_act()); // Force full redraw
+    lv_obj_invalidate(lv_scr_act());
     lv_timer_handler();
     delay(50);
     lv_timer_handler();
