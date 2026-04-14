@@ -1205,7 +1205,7 @@ void setup() {
     Serial.printf("WLAN: %s\n", WiFi.SSID().c_str());
 
     // DNS braucht kurz nach Verbindungsaufbau
-    lv_label_set_text(lbl_status, "WLAN OK – warte auf DNS...");
+    lv_label_set_text(lbl_status, "WLAN OK - warte auf DNS...");
     lv_timer_handler();
     delay(2000);
 
@@ -1256,7 +1256,7 @@ void setup() {
     delay(50);
     lv_timer_handler();
   } else {
-    lv_label_set_text(lbl_status, "Kein WLAN – Bitte neu starten");
+    lv_label_set_text(lbl_status, "Kein WLAN - Bitte neu starten");
     lv_timer_handler();
   }
 
