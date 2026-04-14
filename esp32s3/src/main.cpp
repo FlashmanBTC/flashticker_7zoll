@@ -3,6 +3,28 @@
 //  ESP32-S3 · Elecrow CrowPanel 7.0" (800×480)
 //  LovyanGFX + LVGL 8.3 · WiFiManager · ticker.blitzi.me
 // ============================================================
+//
+//  CHANGELOG
+//  ---------------------------------------------------------
+//  v2.0 (2026-04-14)
+//    - Eigene API: ticker.blitzi.me (kein CoinGecko/Binance)
+//    - Keine Rate-Limit Delays mehr beim API-Abruf
+//    - Alle Chart-Perioden beim Boot vorgeladen (kein UI-Lag)
+//    - Vollbild-Modus für Top-Card (72pt Preis + Hi/Lo)
+//    - Custom Montserrat Fonts: 64pt und 72pt
+//    - QR-Code im WiFi-Setup-Screen (WIFI:S:... Standard)
+//    - WiFiManager: kein Timeout mehr
+//    - Screen-Clear nach WiFi-Setup (verhindert Artefakte)
+//    - "Browser öffnen" Umlaut-Bug behoben
+//    - Label-Positionierung vereinheitlicht (TOP_LEFT)
+//
+//  v1.0 (2026-04-04)
+//    - Erstveröffentlichung
+//    - BTC / Gold / Silber in USD · EUR · CHF
+//    - LovyanGFX + LVGL 8.3 auf CrowPanel 7.0"
+//    - WiFiManager Portal · NTP Uhrzeit · Touch UI
+//    - Linien-Chart mit 1T / 1W / 1M Perioden
+// ============================================================
 
 #define LGFX_USE_V1
 #include <Arduino.h>
