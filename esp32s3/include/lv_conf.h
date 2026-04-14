@@ -68,7 +68,7 @@
 #define LV_USE_BAR       0
 #define LV_USE_BTN       1
 #define LV_USE_BTNMATRIX 1
-#define LV_USE_CANVAS    0
+#define LV_USE_CANVAS    1
 #define LV_USE_CHECKBOX  0
 #define LV_USE_DROPDOWN  0
 #define LV_USE_IMG       1
@@ -100,6 +100,7 @@
 #define LV_USE_TILEVIEW   0
 #define LV_USE_WIN        0
 #define LV_USE_SPAN       0
+#define LV_USE_QRCODE     1
 
 /*====================
    THEME
