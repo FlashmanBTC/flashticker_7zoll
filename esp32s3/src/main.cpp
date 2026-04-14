@@ -1,7 +1,7 @@
 // ============================================================
 //  FLASHTICKER 7" – BTC · Gold · Silber Preisticker
 //  ESP32-S3 · Elecrow CrowPanel 7.0" (800×480)
-//  LovyanGFX + LVGL 8.3 · WiFiManager · CoinGecko
+//  LovyanGFX + LVGL 8.3 · WiFiManager · ticker.blitzi.me
 // ============================================================
 
 #define LGFX_USE_V1
@@ -21,6 +21,10 @@
 #include <Wire.h>
 #include <PCA9557.h>
 #include <driver/i2c.h>
+
+LV_FONT_DECLARE(lv_font_montserrat_64);
+LV_FONT_DECLARE(lv_font_montserrat_72);
+
 
 // ============================================================
 //  Display-Konfiguration (CrowPanel 7.0", offiziell Elecrow)
@@ -182,6 +186,8 @@ void fetch_all_charts(uint8_t period);
 void set_active_asset(Asset a);
 void show_boot_screen();
 void show_wifi_screen();
+void toggle_fullscreen();
+void update_fs_highlow();
 
 // ============================================================
 //  LVGL UI – Referenzen
@@ -199,6 +205,15 @@ lv_obj_t *lbl_top_icon, *lbl_top_price, *lbl_top_chg, *lbl_top_sub, *lbl_top_24h
 // Bottom-Cards (dynamisch)
 lv_obj_t *lbl_b1_icon, *lbl_b1_price, *lbl_b1_sub, *lbl_b1_chg;
 lv_obj_t *lbl_b2_icon, *lbl_b2_price, *lbl_b2_sub, *lbl_b2_chg;
+
+// Vollbild-Modus
+bool      g_fullscreen   = false;
+lv_obj_t *g_top_card     = nullptr;
+lv_obj_t *g_b1_card      = nullptr;
+lv_obj_t *g_b2_card      = nullptr;
+lv_obj_t *g_btn_fullscreen = nullptr;
+lv_obj_t *lbl_fs_high    = nullptr;
+lv_obj_t *lbl_fs_low     = nullptr;
 
 // ============================================================
 //  Hilfsfunktionen
@@ -275,7 +290,8 @@ void create_ui() {
   lv_obj_align(lbl_date, LV_ALIGN_RIGHT_MID, -16, 12);
 
   // ---------- TOP CARD (y=61, h=197) – dynamisches Asset ----------
-  lv_obj_t *top_card = make_card(scr, 0, 61, SCR_W, 197);
+  g_top_card = make_card(scr, 0, 61, SCR_W, 197);
+  lv_obj_t *top_card = g_top_card;
 
   // ---- Chart als Hintergrund ----
   g_chart = lv_chart_create(top_card);
@@ -338,10 +354,12 @@ void create_ui() {
       // Perioden-Label aktualisieren
       const char *period_names[] = {"24h", "1W", "1M"};
       lv_label_set_text(lbl_top_24h, period_names[idx]);
-      // Nur aktives Asset laden – schnell, kein Lag
-      lv_label_set_text(lbl_status, "Lade Chart...");
-      lv_timer_handler();
-      fetch_chart_asset(g_active_asset, idx);
+      // Aus Cache rendern – kein HTTP falls Daten schon vorhanden
+      if (g_chart_cnt[g_active_asset][idx] == 0) {
+        lv_label_set_text(lbl_status, "Lade Chart...");
+        lv_timer_handler();
+        fetch_chart_asset(g_active_asset, idx);
+      }
       update_chart_series();
       update_prices();
       if (g_data_ok) {
@@ -352,40 +370,72 @@ void create_ui() {
     }, LV_EVENT_CLICKED, (void*)(uintptr_t)period_idx);
   }
 
+  // ---- Vollbild-Button (unten rechts in Top Card) ----
+  g_btn_fullscreen = lv_btn_create(top_card);
+  lv_obj_set_size(g_btn_fullscreen, 36, 24);
+  lv_obj_set_pos(g_btn_fullscreen, SCR_W - 44, 162);
+  lv_obj_set_style_radius(g_btn_fullscreen, 4, 0);
+  lv_obj_set_style_pad_all(g_btn_fullscreen, 0, 0);
+  lv_obj_set_style_bg_color(g_btn_fullscreen, lv_color_hex(0x1A1A28), 0);
+  lv_obj_set_style_border_color(g_btn_fullscreen, lv_color_hex(0x3A3A55), 0);
+  lv_obj_set_style_border_width(g_btn_fullscreen, 1, 0);
+  { lv_obj_t *fl = lv_label_create(g_btn_fullscreen);
+    lv_label_set_text(fl, LV_SYMBOL_PLUS);
+    lv_obj_set_style_text_color(fl, lv_color_hex(0x666677), 0);
+    lv_obj_center(fl); }
+  lv_obj_add_event_cb(g_btn_fullscreen, [](lv_event_t *e) {
+    toggle_fullscreen();
+  }, LV_EVENT_CLICKED, NULL);
+
+  // ---- High/Low Labels (nur im Vollbild sichtbar) ----
+  lbl_fs_high = lv_label_create(top_card);
+  lv_label_set_text(lbl_fs_high, "Hi: ---");
+  lv_obj_set_style_text_color(lbl_fs_high, lv_color_hex(0x00C853), 0);
+  lv_obj_set_style_text_font(lbl_fs_high, &lv_font_montserrat_20, 0);
+  lv_obj_add_flag(lbl_fs_high, LV_OBJ_FLAG_HIDDEN);
+
+  lbl_fs_low = lv_label_create(top_card);
+  lv_label_set_text(lbl_fs_low, "Lo: ---");
+  lv_obj_set_style_text_color(lbl_fs_low, lv_color_hex(0xE53935), 0);
+  lv_obj_set_style_text_font(lbl_fs_low, &lv_font_montserrat_20, 0);
+  lv_obj_add_flag(lbl_fs_low, LV_OBJ_FLAG_HIDDEN);
+
   // ---- Top Card Labels (dynamisch) ----
   lbl_top_icon = lv_label_create(top_card);
   lv_label_set_text(lbl_top_icon, "BITCOIN");
   lv_obj_set_style_text_color(lbl_top_icon, lv_color_hex(0xF7931A), 0);
   lv_obj_set_style_text_font(lbl_top_icon, &lv_font_montserrat_20, 0);
-  lv_obj_align(lbl_top_icon, LV_ALIGN_TOP_LEFT, 24, 18);
+  lv_obj_align(lbl_top_icon, LV_ALIGN_TOP_LEFT, 24, 14);
 
   lbl_top_price = lv_label_create(top_card);
   lv_label_set_text(lbl_top_price, "---,---");
   lv_obj_set_style_text_color(lbl_top_price, lv_color_hex(0xFFFFFF), 0);
   lv_obj_set_style_text_font(lbl_top_price, &lv_font_montserrat_48, 0);
-  lv_obj_align(lbl_top_price, LV_ALIGN_LEFT_MID, 24, 0);
+  lv_obj_align(lbl_top_price, LV_ALIGN_TOP_LEFT, 24, 40);
 
   lbl_top_chg = lv_label_create(top_card);
   lv_label_set_text(lbl_top_chg, "---");
   lv_obj_set_style_text_color(lbl_top_chg, lv_color_hex(0x888888), 0);
   lv_obj_set_style_text_font(lbl_top_chg, &lv_font_montserrat_32, 0);
-  lv_obj_align(lbl_top_chg, LV_ALIGN_RIGHT_MID, -24, -10);
+  lv_obj_align(lbl_top_chg, LV_ALIGN_TOP_RIGHT, -24, 46);
 
   lbl_top_sub = lv_label_create(top_card);
   lv_label_set_text(lbl_top_sub, "");
   lv_obj_set_style_text_color(lbl_top_sub, lv_color_hex(0xAAAAAA), 0);
   lv_obj_set_style_text_font(lbl_top_sub, &lv_font_montserrat_20, 0);
-  lv_obj_align(lbl_top_sub, LV_ALIGN_LEFT_MID, 24, 50);
+  lv_obj_align(lbl_top_sub, LV_ALIGN_TOP_LEFT, 24, 102);
 
   lbl_top_24h = lv_label_create(top_card);
   lv_label_set_text(lbl_top_24h, "24h");
   lv_obj_set_style_text_color(lbl_top_24h, lv_color_hex(0x555566), 0);
   lv_obj_set_style_text_font(lbl_top_24h, &lv_font_montserrat_14, 0);
-  lv_obj_align(lbl_top_24h, LV_ALIGN_RIGHT_MID, -24, 20);
+  lv_obj_align(lbl_top_24h, LV_ALIGN_TOP_RIGHT, -24, 88);
 
   // ---------- BOTTOM CARDS (y=260, h=176) – antippen wechselt Asset nach oben ----------
-  lv_obj_t *b1_card = make_card(scr, 0, 260, 399, 176, 0x0F0F1E, true, true);
-  lv_obj_t *b2_card = make_card(scr, 401, 260, 399, 176, 0x0F0F1E, true, true);
+  g_b1_card = make_card(scr, 0, 260, 399, 176, 0x0F0F1E, true, true);
+  lv_obj_t *b1_card = g_b1_card;
+  g_b2_card = make_card(scr, 401, 260, 399, 176, 0x0F0F1E, true, true);
+  lv_obj_t *b2_card = g_b2_card;
 
   lv_obj_add_event_cb(b1_card, [](lv_event_t *e) {
     set_active_asset(g_b1_asset);
@@ -625,6 +675,9 @@ void update_prices() {
   // ---- Bottom Cards ----
   fill_bottom(g_b1_asset, lbl_b1_icon, lbl_b1_price, lbl_b1_sub, lbl_b1_chg);
   fill_bottom(g_b2_asset, lbl_b2_icon, lbl_b2_price, lbl_b2_sub, lbl_b2_chg);
+
+  // ---- High/Low im Vollbild ----
+  update_fs_highlow();
 }
 
 // ============================================================
@@ -657,7 +710,99 @@ void set_active_asset(Asset a) {
 }
 
 // ============================================================
-//  CoinGecko API abrufen
+//  Vollbild-Modus
+// ============================================================
+static void calc_high_low(float *out_hi, float *out_lo) {
+  uint8_t cnt = g_chart_cnt[g_active_asset][g_chart_period];
+  if (cnt == 0) { *out_hi = *out_lo = 0; return; }
+  int16_t hi = g_chart_data[g_active_asset][g_chart_period][0];
+  int16_t lo = hi;
+  for (int i = 1; i < cnt; i++) {
+    int16_t v = g_chart_data[g_active_asset][g_chart_period][i];
+    if (v > hi) hi = v;
+    if (v < lo) lo = v;
+  }
+  *out_hi = (float)hi * CHART_DIV[g_active_asset];
+  *out_lo = (float)lo * CHART_DIV[g_active_asset];
+}
+
+void update_fs_highlow() {
+  if (!g_fullscreen || !lbl_fs_high || !lbl_fs_low) return;
+  float hi, lo;
+  calc_high_low(&hi, &lo);
+  char buf[32];
+  const char *sym = CUR_SYMBOL[g_cur];
+  // High/Low immer in USD aus Chart, daher kein Währungs-Offset – nur Label anpassen
+  if (hi > 0) {
+    fmt_price(buf, sizeof(buf), hi, sym, g_active_asset == ASSET_BTC ? 0 : 2);
+    char lbuf[48]; snprintf(lbuf, sizeof(lbuf), "Hi: %s", buf);
+    lv_label_set_text(lbl_fs_high, lbuf);
+  }
+  if (lo > 0) {
+    fmt_price(buf, sizeof(buf), lo, sym, g_active_asset == ASSET_BTC ? 0 : 2);
+    char lbuf[48]; snprintf(lbuf, sizeof(lbuf), "Lo: %s", buf);
+    lv_label_set_text(lbl_fs_low, lbuf);
+  }
+}
+
+void toggle_fullscreen() {
+  if (!g_top_card || !g_b1_card || !g_b2_card) return;
+  g_fullscreen = !g_fullscreen;
+
+  if (g_fullscreen) {
+    // Bottom Cards ausblenden
+    lv_obj_add_flag(g_b1_card, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(g_b2_card, LV_OBJ_FLAG_HIDDEN);
+    // Top Card + Chart vergrößern (2px Abstand zur Status Bar wie Bottom Cards)
+    lv_obj_set_size(g_top_card, SCR_W, 375);
+    lv_obj_set_size(g_chart, SCR_W, 375);
+    // Font vergrößern + Labels neu positionieren
+    lv_obj_set_style_text_font(lbl_top_price, &lv_font_montserrat_72, 0);
+    lv_obj_align(lbl_top_icon,  LV_ALIGN_TOP_LEFT,   24,  14);
+    lv_obj_align(lbl_top_price, LV_ALIGN_TOP_LEFT,   24,  40);
+    lv_obj_align(lbl_top_chg,   LV_ALIGN_TOP_RIGHT, -24,  55);
+    lv_obj_align(lbl_top_sub,   LV_ALIGN_TOP_LEFT,   24, 132);
+    lv_obj_align(lbl_top_24h,   LV_ALIGN_TOP_RIGHT, -24, 115);
+    // High/Low anzeigen
+    lv_obj_clear_flag(lbl_fs_high, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(lbl_fs_low,  LV_OBJ_FLAG_HIDDEN);
+    lv_obj_align(lbl_fs_high, LV_ALIGN_TOP_LEFT,  24, 148);
+    lv_obj_align(lbl_fs_low,  LV_ALIGN_TOP_LEFT, 310, 148);
+    // Perioden-Buttons nach unten verschieben
+    for (int i = 0; i < 3; i++)
+      lv_obj_set_pos(g_btn_period[i], 24 + i * 50, 340);
+    // Vollbild-Button: Icon zu X wechseln
+    lv_obj_set_pos(g_btn_fullscreen, SCR_W - 44, 340);
+    lv_label_set_text(lv_obj_get_child(g_btn_fullscreen, 0), LV_SYMBOL_CLOSE);
+    update_fs_highlow();
+  } else {
+    // Bottom Cards wieder einblenden
+    lv_obj_clear_flag(g_b1_card, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_clear_flag(g_b2_card, LV_OBJ_FLAG_HIDDEN);
+    // Top Card + Chart zurücksetzen
+    lv_obj_set_size(g_top_card, SCR_W, 197);
+    lv_obj_set_size(g_chart, SCR_W, 197);
+    // Font zurücksetzen + Labels zurück auf Normal-Positionen
+    lv_obj_set_style_text_font(lbl_top_price, &lv_font_montserrat_48, 0);
+    lv_obj_align(lbl_top_icon,  LV_ALIGN_TOP_LEFT,   24,  14);
+    lv_obj_align(lbl_top_price, LV_ALIGN_TOP_LEFT,   24,  40);
+    lv_obj_align(lbl_top_chg,   LV_ALIGN_TOP_RIGHT, -24,  46);
+    lv_obj_align(lbl_top_sub,   LV_ALIGN_TOP_LEFT,   24, 102);
+    lv_obj_align(lbl_top_24h,   LV_ALIGN_TOP_RIGHT, -24,  88);
+    // High/Low ausblenden
+    lv_obj_add_flag(lbl_fs_high, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(lbl_fs_low,  LV_OBJ_FLAG_HIDDEN);
+    // Perioden-Buttons zurück
+    for (int i = 0; i < 3; i++)
+      lv_obj_set_pos(g_btn_period[i], 24 + i * 50, 162);
+    // Vollbild-Button: Icon zu + wechseln
+    lv_obj_set_pos(g_btn_fullscreen, SCR_W - 44, 162);
+    lv_label_set_text(lv_obj_get_child(g_btn_fullscreen, 0), LV_SYMBOL_PLUS);
+  }
+}
+
+// ============================================================
+//  ticker.blitzi.me API abrufen
 // ============================================================
 bool fetchPrices() {
   if (WiFi.status() != WL_CONNECTED) return false;
@@ -668,73 +813,34 @@ bool fetchPrices() {
   client.setInsecure();
   HTTPClient http;
 
-  // ---- Binance: BTC/USDT Preis ----
-  http.begin(client, "https://api.binance.com/api/v3/ticker/24hr?symbol=BTCUSDT");
-  http.setTimeout(15000);
+  http.begin(client, "https://ticker.blitzi.me/prices/all");
+  http.setTimeout(10000);
   int code = http.GET();
   if (code != 200) {
-    Serial.printf("Binance Fehler: HTTP %d\n", code);
+    Serial.printf("API Fehler: HTTP %d\n", code);
     http.end(); return false;
   }
-  {
-    JsonDocument doc;
-    auto err = deserializeJson(doc, http.getString());
-    http.end();
-    if (err) { Serial.printf("Binance JSON: %s\n", err.c_str()); return false; }
-    float btc_usd      = atof(doc["lastPrice"]    | "0");
-    float btc_chg_pct  = atof(doc["priceChangePercent"] | "0");
-    // BTC in USD – EUR und CHF via festen Kurs (wird separat aktualisiert)
-    // Für jetzt: USD direkt, EUR/CHF approximiert
-    g_btc[USD] = btc_usd;  // Binance liefert nur USD; EUR/CHF folgen via CoinGecko
-    g_btc_chg[EUR] = g_btc_chg[CHF] = g_btc_chg[USD] = btc_chg_pct;
-    Serial.printf("BTC: $%.2f (%.2f%%)\n", btc_usd, btc_chg_pct);
-  }
 
-  // ---- CoinGecko: Alle Währungen + Metalle ----
-  http.begin(client,
-    "https://api.coingecko.com/api/v3/simple/price"
-    "?ids=bitcoin,pax-gold,kinesis-silver"
-    "&vs_currencies=usd,eur,chf"
-    "&include_24hr_change=true");
-  http.setTimeout(15000);
-  code = http.GET();
-  if (code == 200) {
-    JsonDocument doc;
-    String body = http.getString();
-    http.end();
-    Serial.printf("CoinGecko OK (%d bytes)\n", body.length());
-    auto err = deserializeJson(doc, body);
-    if (!err) {
-      // Enum: EUR=0, CHF=1, USD=2
-      g_btc[EUR]     = doc["bitcoin"]["eur"]            | g_btc[EUR];
-      g_btc[CHF]     = doc["bitcoin"]["chf"]            | g_btc[EUR] * 0.96f;
-      g_btc[USD]     = doc["bitcoin"]["usd"]            | g_btc[EUR] * 1.09f;
-      g_btc_chg[EUR] = doc["bitcoin"]["eur_24h_change"] | g_btc_chg[EUR];
-      g_btc_chg[CHF] = doc["bitcoin"]["chf_24h_change"] | g_btc_chg[EUR];
-      g_btc_chg[USD] = doc["bitcoin"]["usd_24h_change"] | g_btc_chg[EUR];
+  JsonDocument doc;
+  auto err = deserializeJson(doc, http.getStream());
+  http.end();
+  if (err) { Serial.printf("API JSON: %s\n", err.c_str()); return false; }
 
-      g_gold[EUR]     = doc["pax-gold"]["eur"]            | 0.0f;
-      g_gold[CHF]     = doc["pax-gold"]["chf"]            | 0.0f;
-      g_gold[USD]     = doc["pax-gold"]["usd"]            | 0.0f;
-      g_gold_chg[EUR] = doc["pax-gold"]["eur_24h_change"] | 0.0f;
-      g_gold_chg[CHF] = doc["pax-gold"]["chf_24h_change"] | 0.0f;
-      g_gold_chg[USD] = doc["pax-gold"]["usd_24h_change"] | 0.0f;
+  JsonObject data = doc["data"].as<JsonObject>();
+  g_btc[USD]    = data["BTC_USD"]["price"] | 0.0f;
+  g_btc[EUR]    = data["BTC_EUR"]["price"] | 0.0f;
+  g_btc[CHF]    = data["BTC_CHF"]["price"] | 0.0f;
+  g_gold[USD]   = data["XAU_USD"]["price"] | 0.0f;
+  g_gold[EUR]   = data["XAU_EUR"]["price"] | 0.0f;
+  g_gold[CHF]   = data["XAU_CHF"]["price"] | 0.0f;
+  g_silver[USD] = data["XAG_USD"]["price"] | 0.0f;
+  g_silver[EUR] = data["XAG_EUR"]["price"] | 0.0f;
+  g_silver[CHF] = data["XAG_CHF"]["price"] | 0.0f;
 
-      g_silver[EUR]     = doc["kinesis-silver"]["eur"]            | 0.0f;
-      g_silver[CHF]     = doc["kinesis-silver"]["chf"]            | 0.0f;
-      g_silver[USD]     = doc["kinesis-silver"]["usd"]            | 0.0f;
-      g_silver_chg[EUR] = doc["kinesis-silver"]["eur_24h_change"] | 0.0f;
-      g_silver_chg[CHF] = doc["kinesis-silver"]["chf_24h_change"] | 0.0f;
-      g_silver_chg[USD] = doc["kinesis-silver"]["usd_24h_change"] | 0.0f;
+  Serial.printf("BTC: $%.2f  Gold: $%.2f  Silver: $%.4f\n",
+                g_btc[USD], g_gold[USD], g_silver[USD]);
 
-      Serial.printf("Gold: EUR %.2f  Silver: EUR %.4f\n", g_gold[EUR], g_silver[EUR]);
-    }
-  } else {
-    http.end();
-    Serial.printf("CoinGecko Fehler: %d – nur BTC verfuegbar\n", code);
-  }
-
-  // Wenn BTC > 0 gilt es als Erfolg (Gold/Silver optional)
+  // 24h Change wird aus der 1d-History berechnet (in fetch_chart_asset period=0)
   return g_btc[USD] > 0;
 }
 
@@ -810,10 +916,10 @@ void show_wifi_screen() {
   lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_28, 0);
   lv_obj_align(lbl_title, LV_ALIGN_CENTER, 0, 0);
 
-  // Anleitung Box
+  // Anleitung Box (links)
   lv_obj_t *box = lv_obj_create(scr);
-  lv_obj_set_pos(box, 80, 100);
-  lv_obj_set_size(box, 640, 280);
+  lv_obj_set_pos(box, 30, 90);
+  lv_obj_set_size(box, 470, 310);
   lv_obj_set_style_bg_color(box, lv_color_hex(0x0F0F1E), 0);
   lv_obj_set_style_border_color(box, lv_color_hex(0x1E1E3A), 0);
   lv_obj_set_style_border_width(box, 1, 0);
@@ -843,20 +949,32 @@ void show_wifi_screen() {
 
   // Schritt 2
   lv_obj_t *s2 = lv_label_create(box);
-  lv_label_set_text(s2, "2.  Browser öffnen und aufrufen:");
+  lv_label_set_text(s2, "2.  Browser aufrufen:");
   lv_obj_set_style_text_color(s2, lv_color_hex(0xAAAAAA), 0);
   lv_obj_set_style_text_font(s2, &lv_font_montserrat_18, 0);
-  lv_obj_align(s2, LV_ALIGN_TOP_LEFT, 0, 124);
+  lv_obj_align(s2, LV_ALIGN_TOP_LEFT, 0, 140);
 
   lv_obj_t *ip = lv_label_create(box);
   lv_label_set_text(ip, "192.168.4.1");
   lv_obj_set_style_text_color(ip, lv_color_hex(0xF7931A), 0);
   lv_obj_set_style_text_font(ip, &lv_font_montserrat_28, 0);
-  lv_obj_align(ip, LV_ALIGN_TOP_LEFT, 28, 156);
+  lv_obj_align(ip, LV_ALIGN_TOP_LEFT, 28, 174);
+
+  // QR-Code rechts (WiFi-Credentials zum Scannen)
+  lv_obj_t *qr = lv_qrcode_create(scr, 200, lv_color_hex(0x0A0A10), lv_color_hex(0xFFFFFF));
+  const char *wifi_qr = "WIFI:S:FLASHTICKER;T:WPA;P:flashticker;;";
+  lv_qrcode_update(qr, wifi_qr, strlen(wifi_qr));
+  lv_obj_set_pos(qr, 560, 110);
+
+  lv_obj_t *qr_lbl = lv_label_create(scr);
+  lv_label_set_text(qr_lbl, "WiFi scannen");
+  lv_obj_set_style_text_color(qr_lbl, lv_color_hex(0x666677), 0);
+  lv_obj_set_style_text_font(qr_lbl, &lv_font_montserrat_14, 0);
+  lv_obj_align_to(qr_lbl, qr, LV_ALIGN_OUT_BOTTOM_MID, 0, 8);
 
   // Warte-Status unten
   lv_obj_t *lbl_wait = lv_label_create(scr);
-  lv_label_set_text(lbl_wait, "Warte auf WLAN-Verbindung...  (Timeout: 3 Min.)");
+  lv_label_set_text(lbl_wait, "Warte auf WLAN-Verbindung...");
   lv_obj_set_style_text_color(lbl_wait, lv_color_hex(0x444455), 0);
   lv_obj_set_style_text_font(lbl_wait, &lv_font_montserrat_14, 0);
   lv_obj_align(lbl_wait, LV_ALIGN_BOTTOM_MID, 0, -20);
@@ -901,88 +1019,55 @@ void fetch_chart_asset(Asset a, uint8_t period) {
   WiFiClientSecure client;
   client.setInsecure();
   HTTPClient http;
-  char url[192];
-  int code;
+  char url[128];
 
-  if (a == ASSET_BTC) {
-    // Binance Klines (BTCUSDT)
-    const char *interval;
-    uint8_t limit;
-    switch (period) {
-      case 1:  interval = "4h"; limit = 42; break;
-      case 2:  interval = "1d"; limit = 30; break;
-      default: interval = "1h"; limit = 24; break;
-    }
-    snprintf(url, sizeof(url),
-      "https://api.binance.com/api/v3/klines?symbol=BTCUSDT&interval=%s&limit=%d",
-      interval, limit);
-    http.begin(client, url);
-    http.setTimeout(10000);
-    code = http.GET();
-    if (code != 200) { http.end(); return; }
-    JsonDocument doc;
-    auto err = deserializeJson(doc, http.getStream());
-    http.end();
-    if (err) return;
-    int n = doc.size();
-    if (n > CHART_MAX_PTS) n = CHART_MAX_PTS;
-    for (int i = 0; i < n; i++) {
-      float close_usd = atof(doc[i][4] | "0");
-      g_chart_data[ASSET_BTC][period][i] = (int16_t)(close_usd / CHART_DIV[ASSET_BTC]);
-    }
-    g_chart_cnt[ASSET_BTC][period] = n;
-    Serial.printf("BTC Chart P%d: %d Punkte\n", period, n);
+  const char *asset_str  = (a == ASSET_BTC) ? "BTC" : (a == ASSET_GOLD) ? "XAU" : "XAG";
+  const char *period_str = (period == 1) ? "1w" : (period == 2) ? "1m" : "1d";
 
-  } else {
-    // CoinGecko market_chart (pax-gold oder kinesis-silver)
-    // Pause um CoinGecko Rate-Limit zu vermeiden (nach fetchPrices oder vorherigem Call)
-    delay(3000);
-    lv_timer_handler();
-    const char *coin_id = (a == ASSET_GOLD) ? "pax-gold" : "kinesis-silver";
-    int days = (period == 1) ? 7 : (period == 2) ? 30 : 1;
-    snprintf(url, sizeof(url),
-      "https://api.coingecko.com/api/v3/coins/%s/market_chart"
-      "?vs_currency=usd&days=%d",
-      coin_id, days);
-    http.begin(client, url);
-    http.setTimeout(15000);
-    code = http.GET();
-    if (code != 200) {
-      Serial.printf("%s Chart P%d HTTP %d\n", coin_id, period, code);
-      http.end(); return;
-    }
-    String body = http.getString();
-    http.end();
-    Serial.printf("%s Chart P%d body: %d bytes\n", coin_id, period, body.length());
+  snprintf(url, sizeof(url), "https://ticker.blitzi.me/history/%s/USD/%s",
+           asset_str, period_str);
 
-    JsonDocument doc;
-    auto err = deserializeJson(doc, body);
-    if (err) { Serial.printf("%s JSON err: %s\n", coin_id, err.c_str()); return; }
-
-    // Subsampling: market_chart liefert viele Punkte (bis 288 für 1T)
-    JsonArray prices = doc["prices"].as<JsonArray>();
-    int total = prices.size();
-    Serial.printf("%s Chart P%d: %d Rohdaten\n", coin_id, period, total);
-    if (total == 0) return;
-    int step = max(1, total / (int)CHART_MAX_PTS);
-    int n = 0;
-    for (int i = 0; i < total && n < CHART_MAX_PTS; i += step) {
-      float price = prices[i][1] | 0.0f;
-      g_chart_data[a][period][n++] = (int16_t)(price / CHART_DIV[a]);
-    }
-    g_chart_cnt[a][period] = n;
-    Serial.printf("%s Chart P%d: %d/%d Punkte\n", coin_id, period, n, total);
+  http.begin(client, url);
+  http.setTimeout(10000);
+  int code = http.GET();
+  if (code != 200) {
+    Serial.printf("%s Chart P%d HTTP %d\n", asset_str, period, code);
+    http.end(); return;
   }
 
-  // Periodenänderung aus Chart berechnen (1W und 1M)
-  uint8_t cnt = g_chart_cnt[a][period];
-  if (cnt >= 2 && period > 0) {
+  JsonDocument doc;
+  auto err = deserializeJson(doc, http.getStream());
+  http.end();
+  if (err) { Serial.printf("%s JSON err: %s\n", asset_str, err.c_str()); return; }
+
+  JsonArray prices = doc["data"].as<JsonArray>();
+  int total = prices.size();
+  if (total == 0) return;
+
+  int n = 0;
+  int step = max(1, total / (int)CHART_MAX_PTS);
+  for (int i = 0; i < total && n < CHART_MAX_PTS; i += step) {
+    float price = prices[i]["price"] | 0.0f;
+    g_chart_data[a][period][n++] = (int16_t)(price / CHART_DIV[a]);
+  }
+  g_chart_cnt[a][period] = n;
+  Serial.printf("%s Chart P%d: %d Punkte\n", asset_str, period, n);
+
+  // Änderung aus Chart berechnen (1T → 24h-Change, 1W/1M → Periodenänderung)
+  if (n >= 2) {
     int16_t first = g_chart_data[a][period][0];
-    int16_t last  = g_chart_data[a][period][cnt - 1];
+    int16_t last  = g_chart_data[a][period][n - 1];
     float chg = (first != 0) ? ((float)(last - first) / first * 100.0f) : 0.0f;
-    if (period == 1) g_chg_w[a] = chg;
-    else             g_chg_m[a] = chg;
-    Serial.printf("Änderung P%d Asset%d: %.2f%%\n", period, (int)a, chg);
+    if (period == 0) {
+      if (a == ASSET_BTC)    { g_btc_chg[EUR]    = g_btc_chg[CHF]    = g_btc_chg[USD]    = chg; }
+      if (a == ASSET_GOLD)   { g_gold_chg[EUR]   = g_gold_chg[CHF]   = g_gold_chg[USD]   = chg; }
+      if (a == ASSET_SILVER) { g_silver_chg[EUR] = g_silver_chg[CHF] = g_silver_chg[USD] = chg; }
+    } else if (period == 1) {
+      g_chg_w[a] = chg;
+    } else {
+      g_chg_m[a] = chg;
+    }
+    Serial.printf("%s Änderung P%d: %.2f%%\n", asset_str, period, chg);
   }
 }
 
@@ -1074,14 +1159,20 @@ void setup() {
   // Boot-Screen anzeigen
   show_boot_screen();
 
-  // WiFiManager – bei AP-Modus WiFi-Config-Screen zeigen
+  // WiFiManager – bei AP-Modus WiFi-Config-Screen zeigen (kein Timeout)
   WiFiManager wm;
-  wm.setConfigPortalTimeout(180);
   wm.setAPCallback([](WiFiManager *wm) {
     Serial.println("AP-Modus aktiv – zeige WiFi-Screen");
     show_wifi_screen();
   });
   wm.autoConnect("FLASHTICKER", "flashticker");
+
+  // Screen leeren bevor Haupt-UI aufgebaut wird (verhindert WiFi-Screen-Artefakte)
+  lv_obj_t *blank = lv_obj_create(NULL);
+  lv_obj_set_style_bg_color(blank, lv_color_hex(0x0A0A10), 0);
+  lv_obj_set_style_bg_opa(blank, LV_OPA_COVER, 0);
+  lv_scr_load(blank);
+  lv_timer_handler();
 
   // Haupt-UI laden
   Serial.println("create_ui...");
@@ -1120,7 +1211,9 @@ void setup() {
         snprintf(g_last_update, sizeof(g_last_update),
                  "%02d:%02d", ntpClient.getHours(), ntpClient.getMinutes());
         Serial.println("Preise geladen!");
-        fetch_all_charts(0);  // 1T Charts für alle Assets direkt nach Preisabruf
+        fetch_all_charts(0);  // 1T Charts für alle Assets
+        fetch_all_charts(1);  // 1W Charts für alle Assets
+        fetch_all_charts(2);  // 1M Charts für alle Assets
         break;
       }
       if (attempt < 3) {
@@ -1192,7 +1285,7 @@ void loop() {
       g_last_fetch = millis();
       snprintf(g_last_update, sizeof(g_last_update),
                "%02d:%02d", ntpClient.getHours(), ntpClient.getMinutes());
-      fetch_all_charts(g_chart_period);  // Charts für aktive Periode neu laden
+      for (uint8_t p = 0; p < NUM_PERIODS; p++) fetch_all_charts(p);  // alle Perioden neu laden
     }
   }
 
