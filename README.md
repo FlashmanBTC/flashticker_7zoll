@@ -80,6 +80,20 @@ Abhängigkeiten werden automatisch über `platformio.ini` geladen.
 
 ## Changelog
 
+### v3.1 (2026-04-14)
+- Loading Screen: Fortschrittsbalken füllt sich korrekt (lv_bar, orange)
+- Kein Flash mehr zwischen Bootscreen und Loading Screen
+- Prozentanzeige größer (20pt) und unterhalb des Balkens
+- 5-Min-Hintergrundrefresh ohne Loading Screen
+- Bug Fix: Bottom-Cards korrekt bei Silber/Gold als Boot-Default
+
+### v3.0 (2026-04-14)
+- Einstellungen-Screen (Zahnrad im Header)
+- Boot-Defaults konfigurierbar: Asset, Währung, Chart-Periode, Vollbild
+- Einstellungen werden in NVS gespeichert (überleben Neustart)
+- Version auf Bootscreen und im Einstellungen-Header
+- Loading Screen mit Fortschrittsbalken beim Start
+
 ### v2.0 (2026-04-14)
 - Eigene API: [ticker.blitzi.me](https://ticker.blitzi.me) (kein CoinGecko/Binance mehr)
 - Kein Rate-Limit-Delay mehr beim API-Abruf
