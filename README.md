@@ -80,6 +80,13 @@ Abhängigkeiten werden automatisch über `platformio.ini` geladen.
 
 ## Changelog
 
+### v3.2 (2026-04-15)
+- 1H Chart-Periode hinzugefügt
+- Period-Buttons [1H][1T][1W][1M] in Status Bar (neben Währungsbuttons)
+- Trenner zwischen Perioden- und Währungsbuttons
+- Hi/Lo im Vollbild-Modus unten positioniert (mehr Chartfläche)
+- Dark Badge hinter Hi/Lo Labels (immer lesbar über Chart-Linie)
+
 ### v3.1 (2026-04-14)
 - Loading Screen: Fortschrittsbalken füllt sich korrekt (lv_bar, orange)
 - Kein Flash mehr zwischen Bootscreen und Loading Screen

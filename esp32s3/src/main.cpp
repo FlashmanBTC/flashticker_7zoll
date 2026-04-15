@@ -6,6 +6,14 @@
 //
 //  CHANGELOG
 //  ---------------------------------------------------------
+//  v3.2 (2026-04-14)
+//    - 1H Chart-Periode hinzugefügt
+//    - Period-Buttons in Status Bar verschoben (neben Währung)
+//    - Trenner zwischen Perioden- und Währungsbuttons
+//    - Hi/Lo im Vollbild unten (wo Buttons vorher waren)
+//    - Dark Badge hinter Hi/Lo Labels (immer lesbar über Chart)
+//    - Top Card: mehr Chartfläche ohne Buttons
+//
 //  v3.1 (2026-04-14)
 //    - Loading Screen: lv_bar statt manuellem Resize (Balken füllt sich korrekt)
 //    - Kein Flash mehr zwischen Bootscreen und Loading Screen
@@ -42,7 +50,7 @@
 // ============================================================
 
 #define LGFX_USE_V1
-#define FW_VERSION "3.1"
+#define FW_VERSION "3.2"
 #include <Arduino.h>
 #include "Flashman_logo.h"
 #include <LovyanGFX.hpp>
@@ -194,14 +202,15 @@ unsigned long g_last_fetch      = 0;
 // Chart-Daten: [Asset][Periode][Punkt]
 #define CHART_MAX_PTS  42
 #define NUM_ASSETS     3
-#define NUM_PERIODS    3
+#define NUM_PERIODS    4  // 0=1H, 1=1T, 2=1W, 3=1M
 // Skalierungsdivisor pro Asset damit Werte in int16 passen (BTC >32767)
 static const int CHART_DIV[NUM_ASSETS] = { 10, 1, 1 };
 int16_t g_chart_data[NUM_ASSETS][NUM_PERIODS][CHART_MAX_PTS];
 uint8_t g_chart_cnt[NUM_ASSETS][NUM_PERIODS];
-uint8_t g_chart_period = 0;  // 0=1T, 1=1W, 2=1M
+uint8_t g_chart_period = 1;  // 0=1H, 1=1T, 2=1W, 3=1M (default 1T)
 
 // Periodenbasierte Änderung (aus Chart berechnet)
+float g_chg_h[NUM_ASSETS];  // 1H Änderung % je Asset
 float g_chg_w[NUM_ASSETS];  // 1W Änderung % je Asset
 float g_chg_m[NUM_ASSETS];  // 1M Änderung % je Asset
 
@@ -219,7 +228,7 @@ Asset g_b2_asset     = ASSET_SILVER;
 // Boot-Defaults (NVS gespeichert, gelten ab naechstem Start)
 uint8_t g_def_asset      = 0;  // 0=BTC, 1=Gold, 2=Silber
 uint8_t g_def_currency   = 0;  // 0=EUR, 1=CHF, 2=USD
-uint8_t g_def_period     = 0;  // 0=1T,  1=1W,  2=1M
+uint8_t g_def_period     = 1;  // 0=1H, 1=1T, 2=1W, 3=1M
 bool    g_def_fullscreen = false;
 
 // ============================================================
@@ -247,7 +256,7 @@ lv_obj_t *lbl_time, *lbl_date;
 lv_obj_t *lbl_status;
 lv_obj_t *g_chart;
 lv_chart_series_t *g_chart_ser;
-lv_obj_t *g_btn_period[3];
+lv_obj_t *g_btn_period[4];
 lv_obj_t *g_btn_cur[3];
 
 // Top-Card (dynamisch)
@@ -396,56 +405,6 @@ void create_ui() {
     }
   }, LV_EVENT_DRAW_PART_BEGIN, NULL);
 
-  // ---- Period-Buttons 1T / 1W / 1M ----
-  const char* period_labels[] = {"1T", "1W", "1M"};
-  for (int i = 0; i < 3; i++) {
-    g_btn_period[i] = lv_btn_create(top_card);
-    lv_obj_set_size(g_btn_period[i], 44, 24);
-    lv_obj_set_pos(g_btn_period[i], 24 + i * 50, 162);
-    lv_obj_set_style_radius(g_btn_period[i], 4, 0);
-    lv_obj_set_style_pad_all(g_btn_period[i], 0, 0);
-    lv_obj_set_style_bg_color(g_btn_period[i], i == (int)g_chart_period ? lv_color_hex(0x2A2A40) : lv_color_hex(0x1A1A28), 0);
-    lv_obj_set_style_border_color(g_btn_period[i], lv_color_hex(0x3A3A55), 0);
-    lv_obj_set_style_border_width(g_btn_period[i], 1, 0);
-    lv_obj_t *lbl = lv_label_create(g_btn_period[i]);
-    lv_label_set_text(lbl, period_labels[i]);
-    lv_obj_set_style_text_font(lbl, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(lbl, i == (int)g_chart_period ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x666677), 0);
-    lv_obj_center(lbl);
-    int period_idx = i;
-    lv_obj_add_event_cb(g_btn_period[i], [](lv_event_t *e) {
-      lv_obj_t *btn = lv_event_get_target(e);
-      uint8_t idx = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
-      g_chart_period = idx;
-      // Alle Buttons zurücksetzen
-      for (int j = 0; j < 3; j++) {
-        lv_obj_set_style_bg_color(g_btn_period[j], lv_color_hex(0x1A1A28), 0);
-        lv_obj_t *lbl = lv_obj_get_child(g_btn_period[j], 0);
-        lv_obj_set_style_text_color(lbl, lv_color_hex(0x666677), 0);
-      }
-      // Aktiven Button hervorheben
-      lv_obj_set_style_bg_color(btn, lv_color_hex(0x2A2A40), 0);
-      lv_obj_t *lbl = lv_obj_get_child(btn, 0);
-      lv_obj_set_style_text_color(lbl, lv_color_hex(0xFFFFFF), 0);
-      // Perioden-Label aktualisieren
-      const char *period_names[] = {"24h", "1W", "1M"};
-      lv_label_set_text(lbl_top_24h, period_names[idx]);
-      // Aus Cache rendern – kein HTTP falls Daten schon vorhanden
-      if (g_chart_cnt[g_active_asset][idx] == 0) {
-        lv_label_set_text(lbl_status, "Lade Chart...");
-        lv_timer_handler();
-        fetch_chart_asset(g_active_asset, idx);
-      }
-      update_chart_series();
-      update_prices();
-      if (g_data_ok) {
-        char sbuf[48];
-        snprintf(sbuf, sizeof(sbuf), "Aktualisiert: %s Uhr", g_last_update);
-        lv_label_set_text(lbl_status, sbuf);
-      }
-    }, LV_EVENT_CLICKED, (void*)(uintptr_t)period_idx);
-  }
-
   // ---- Vollbild-Button (unten rechts in Top Card) ----
   g_btn_fullscreen = lv_btn_create(top_card);
   lv_obj_set_size(g_btn_fullscreen, 36, 24);
@@ -463,17 +422,27 @@ void create_ui() {
     toggle_fullscreen();
   }, LV_EVENT_CLICKED, NULL);
 
-  // ---- High/Low Labels (nur im Vollbild sichtbar) ----
+  // ---- High/Low Labels (nur im Vollbild sichtbar, Dark Badge für Lesbarkeit) ----
   lbl_fs_high = lv_label_create(top_card);
   lv_label_set_text(lbl_fs_high, "Hi: ---");
   lv_obj_set_style_text_color(lbl_fs_high, lv_color_hex(0x00C853), 0);
   lv_obj_set_style_text_font(lbl_fs_high, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_bg_color(lbl_fs_high, lv_color_hex(0x0A0A10), 0);
+  lv_obj_set_style_bg_opa(lbl_fs_high, LV_OPA_80, 0);
+  lv_obj_set_style_pad_hor(lbl_fs_high, 8, 0);
+  lv_obj_set_style_pad_ver(lbl_fs_high, 4, 0);
+  lv_obj_set_style_radius(lbl_fs_high, 4, 0);
   lv_obj_add_flag(lbl_fs_high, LV_OBJ_FLAG_HIDDEN);
 
   lbl_fs_low = lv_label_create(top_card);
   lv_label_set_text(lbl_fs_low, "Lo: ---");
   lv_obj_set_style_text_color(lbl_fs_low, lv_color_hex(0xE53935), 0);
   lv_obj_set_style_text_font(lbl_fs_low, &lv_font_montserrat_20, 0);
+  lv_obj_set_style_bg_color(lbl_fs_low, lv_color_hex(0x0A0A10), 0);
+  lv_obj_set_style_bg_opa(lbl_fs_low, LV_OPA_80, 0);
+  lv_obj_set_style_pad_hor(lbl_fs_low, 8, 0);
+  lv_obj_set_style_pad_ver(lbl_fs_low, 4, 0);
+  lv_obj_set_style_radius(lbl_fs_low, 4, 0);
   lv_obj_add_flag(lbl_fs_low, LV_OBJ_FLAG_HIDDEN);
 
   // ---- Top Card Labels (dynamisch) ----
@@ -636,6 +605,44 @@ void create_ui() {
       update_prices();
     }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
   }
+
+  // ---------- Separator zwischen Perioden- und Währungsbuttons ----------
+  lv_obj_t *lbl_sep = lv_label_create(status_bar);
+  lv_label_set_text(lbl_sep, "|");
+  lv_obj_set_style_text_color(lbl_sep, lv_color_hex(0x2A2A40), 0);
+  lv_obj_set_style_text_font(lbl_sep, &lv_font_montserrat_20, 0);
+  lv_obj_align(lbl_sep, LV_ALIGN_RIGHT_MID, -192, 0);
+
+  // ---------- Perioden-Buttons in Status Bar ----------
+  const char* per_labels[] = {"1H", "1T", "1W", "1M"};
+  for (int i = 0; i < NUM_PERIODS; i++) {
+    g_btn_period[i] = lv_btn_create(status_bar);
+    lv_obj_set_size(g_btn_period[i], 44, 26);
+    lv_obj_align(g_btn_period[i], LV_ALIGN_RIGHT_MID, -212 - (3-i) * 50, 0);
+    lv_obj_set_style_radius(g_btn_period[i], 4, 0);
+    lv_obj_set_style_pad_all(g_btn_period[i], 0, 0);
+    bool pactive = (i == (int)g_chart_period);
+    lv_obj_set_style_bg_color(g_btn_period[i], pactive ? lv_color_hex(0x2A2A40) : lv_color_hex(0x111120), 0);
+    lv_obj_set_style_border_color(g_btn_period[i], lv_color_hex(0x3A3A55), 0);
+    lv_obj_set_style_border_width(g_btn_period[i], 1, 0);
+    lv_obj_t *plbl = lv_label_create(g_btn_period[i]);
+    lv_label_set_text(plbl, per_labels[i]);
+    lv_obj_set_style_text_font(plbl, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(plbl, pactive ? lv_color_hex(0xF7931A) : lv_color_hex(0x555566), 0);
+    lv_obj_center(plbl);
+    lv_obj_add_event_cb(g_btn_period[i], [](lv_event_t *e) {
+      uint8_t idx = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
+      g_chart_period = idx;
+      for (int j = 0; j < NUM_PERIODS; j++) {
+        lv_obj_set_style_bg_color(g_btn_period[j], lv_color_hex(0x111120), 0);
+        lv_obj_set_style_text_color(lv_obj_get_child(g_btn_period[j], 0), lv_color_hex(0x555566), 0);
+      }
+      lv_obj_set_style_bg_color(g_btn_period[idx], lv_color_hex(0x2A2A40), 0);
+      lv_obj_set_style_text_color(lv_obj_get_child(g_btn_period[idx], 0), lv_color_hex(0xF7931A), 0);
+      update_chart_series();
+      update_prices();
+    }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
+  }
 }
 
 // ============================================================
@@ -651,9 +658,10 @@ void update_prices() {
 
   // Periodenbasierte Änderung wählen (24h aus API, 1W/1M aus Chart)
   auto get_chg = [&](Asset a) -> float {
-    if (g_chart_period == 1) return g_chg_w[a];
-    if (g_chart_period == 2) return g_chg_m[a];
-    // 1T: per-currency 24h Wert aus API
+    if (g_chart_period == 0) return g_chg_h[a];   // 1H
+    if (g_chart_period == 2) return g_chg_w[a];   // 1W
+    if (g_chart_period == 3) return g_chg_m[a];   // 1M
+    // 1T (period 1): per-currency 24h aus Chart
     if (a == ASSET_BTC)    return g_btc_chg[c];
     if (a == ASSET_GOLD)   return g_gold_chg[c];
     return g_silver_chg[c];
@@ -839,14 +847,11 @@ void toggle_fullscreen() {
     lv_obj_align(lbl_top_chg,   LV_ALIGN_TOP_RIGHT, -24,  55);
     lv_obj_align(lbl_top_sub,   LV_ALIGN_TOP_LEFT,   24, 132);
     lv_obj_align(lbl_top_24h,   LV_ALIGN_TOP_RIGHT, -24, 115);
-    // High/Low anzeigen
+    // High/Low unten anzeigen (wo vorher Buttons waren)
     lv_obj_clear_flag(lbl_fs_high, LV_OBJ_FLAG_HIDDEN);
     lv_obj_clear_flag(lbl_fs_low,  LV_OBJ_FLAG_HIDDEN);
-    lv_obj_align(lbl_fs_high, LV_ALIGN_TOP_LEFT,  24, 148);
-    lv_obj_align(lbl_fs_low,  LV_ALIGN_TOP_LEFT, 310, 148);
-    // Perioden-Buttons nach unten verschieben
-    for (int i = 0; i < 3; i++)
-      lv_obj_set_pos(g_btn_period[i], 24 + i * 50, 340);
+    lv_obj_align(lbl_fs_high, LV_ALIGN_TOP_LEFT,  24, 310);
+    lv_obj_align(lbl_fs_low,  LV_ALIGN_TOP_LEFT, 220, 310);
     // Vollbild-Button: Icon zu X wechseln
     lv_obj_set_pos(g_btn_fullscreen, SCR_W - 44, 340);
     lv_label_set_text(lv_obj_get_child(g_btn_fullscreen, 0), LV_SYMBOL_CLOSE);
@@ -868,9 +873,6 @@ void toggle_fullscreen() {
     // High/Low ausblenden
     lv_obj_add_flag(lbl_fs_high, LV_OBJ_FLAG_HIDDEN);
     lv_obj_add_flag(lbl_fs_low,  LV_OBJ_FLAG_HIDDEN);
-    // Perioden-Buttons zurück
-    for (int i = 0; i < 3; i++)
-      lv_obj_set_pos(g_btn_period[i], 24 + i * 50, 162);
     // Vollbild-Button: Icon zu + wechseln
     lv_obj_set_pos(g_btn_fullscreen, SCR_W - 44, 162);
     lv_label_set_text(lv_obj_get_child(g_btn_fullscreen, 0), LV_SYMBOL_PLUS);
@@ -1155,7 +1157,7 @@ void load_settings() {
   // Bounds-Check
   if (g_def_asset    > 2) g_def_asset    = 0;
   if (g_def_currency > 2) g_def_currency = 0;
-  if (g_def_period   > 2) g_def_period   = 0;
+  if (g_def_period   > 3) g_def_period   = 1;
   // Auf Runtime-Globals anwenden
   g_active_asset = (Asset)g_def_asset;
   g_cur          = (Currency)g_def_currency;
@@ -1185,7 +1187,7 @@ void save_settings() {
 // ============================================================
 static lv_obj_t *s_asset_btns[3];
 static lv_obj_t *s_cur_btns[3];
-static lv_obj_t *s_period_btns[3];
+static lv_obj_t *s_period_btns[4];
 static lv_obj_t *s_fs_btns[2];
 
 static void settings_highlight(lv_obj_t **btns, int count, int active) {
@@ -1304,15 +1306,15 @@ void show_settings_screen(lv_obj_t *prev_scr) {
   lv_obj_set_style_text_color(lbl2, lv_color_hex(0xAAAAAA), 0);
   lv_obj_set_style_text_font(lbl2, &lv_font_montserrat_18, 0);
   lv_obj_align(lbl2, LV_ALIGN_LEFT_MID, 20, 0);
-  const char *period_labels[] = {"1T", "1W", "1M"};
-  for (int i = 0; i < 3; i++) {
+  const char *period_labels[] = {"1H", "1T", "1W", "1M"};
+  for (int i = 0; i < 4; i++) {
     s_period_btns[i] = make_sbtn(row2, period_labels[i],
-      LV_ALIGN_RIGHT_MID, -16 - (2-i)*106, i == (int)g_def_period);
+      LV_ALIGN_RIGHT_MID, -16 - (3-i)*106, i == (int)g_def_period);
     lv_obj_add_event_cb(s_period_btns[i], [](lv_event_t *e) {
       uint8_t idx = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
       g_def_period = idx;
       save_settings();
-      settings_highlight(s_period_btns, 3, idx);
+      settings_highlight(s_period_btns, 4, idx);
     }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
   }
 
@@ -1385,7 +1387,7 @@ void fetch_chart_asset(Asset a, uint8_t period) {
   char url[128];
 
   const char *asset_str  = (a == ASSET_BTC) ? "BTC" : (a == ASSET_GOLD) ? "XAU" : "XAG";
-  const char *period_str = (period == 1) ? "1w" : (period == 2) ? "1m" : "1d";
+  const char *period_str = (period == 1) ? "1d" : (period == 2) ? "1w" : (period == 3) ? "1m" : "1h";
 
   snprintf(url, sizeof(url), "https://ticker.blitzi.me/history/%s/USD/%s",
            asset_str, period_str);
@@ -1422,13 +1424,16 @@ void fetch_chart_asset(Asset a, uint8_t period) {
     int16_t last  = g_chart_data[a][period][n - 1];
     float chg = (first != 0) ? ((float)(last - first) / first * 100.0f) : 0.0f;
     if (period == 0) {
+      g_chg_h[a] = chg;  // 1H Änderung
+    } else if (period == 1) {
+      // 1T: 24h-Change in alle Währungsslots schreiben
       if (a == ASSET_BTC)    { g_btc_chg[EUR]    = g_btc_chg[CHF]    = g_btc_chg[USD]    = chg; }
       if (a == ASSET_GOLD)   { g_gold_chg[EUR]   = g_gold_chg[CHF]   = g_gold_chg[USD]   = chg; }
       if (a == ASSET_SILVER) { g_silver_chg[EUR] = g_silver_chg[CHF] = g_silver_chg[USD] = chg; }
-    } else if (period == 1) {
-      g_chg_w[a] = chg;
+    } else if (period == 2) {
+      g_chg_w[a] = chg;  // 1W Änderung
     } else {
-      g_chg_m[a] = chg;
+      g_chg_m[a] = chg;  // 1M Änderung
     }
     Serial.printf("%s Änderung P%d: %.2f%%\n", asset_str, period, chg);
   }
