@@ -50,7 +50,7 @@
 // ============================================================
 
 #define LGFX_USE_V1
-#define FW_VERSION "3.2"
+#define FW_VERSION "3.3"
 #include <Arduino.h>
 #include "Flashman_logo.h"
 #include <LovyanGFX.hpp>
