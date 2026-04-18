@@ -6,6 +6,10 @@
 //
 //  CHANGELOG
 //  ---------------------------------------------------------
+//  v3.3 (2026-04-18)
+//    - Hi/Lo Vollbild: zeigt jetzt korrekte Werte in gewählter Währung (EUR/CHF/USD)
+//    - 1H-Button temporär ausgeblendet (API liefert noch keine 1h-Daten)
+//
 //  v3.2 (2026-04-14)
 //    - 1H Chart-Periode hinzugefügt
 //    - Period-Buttons in Status Bar verschoben (neben Währung)
