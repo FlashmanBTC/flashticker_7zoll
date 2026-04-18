@@ -5,3 +5,6 @@ esp32/.pio/
 # System
 .DS_Store
 Thumbs.db
+
+# Local docs (not for repo)
+docs/
