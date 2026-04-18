@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://flashmanbTC.github.io/flashticker_7zoll/">
-    <img src="https://img.shields.io/badge/Web%20Installer-v2.0-F7931A?style=for-the-badge&logo=espressif" alt="Web Installer" />
+    <img src="https://img.shields.io/badge/Web%20Installer-v3.2-F7931A?style=for-the-badge&logo=espressif" alt="Web Installer" />
   </a>
   &nbsp;
   <img src="https://img.shields.io/badge/Hardware-ESP32--S3-blue?style=for-the-badge" alt="ESP32-S3" />
