@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://flashmanbTC.github.io/flashticker_7zoll/">
-    <img src="https://img.shields.io/badge/Web%20Installer-v3.2-F7931A?style=for-the-badge&logo=espressif" alt="Web Installer" />
+    <img src="https://img.shields.io/badge/Web%20Installer-v3.3-F7931A?style=for-the-badge&logo=espressif" alt="Web Installer" />
   </a>
   &nbsp;
   <img src="https://img.shields.io/badge/Hardware-ESP32--S3-blue?style=for-the-badge" alt="ESP32-S3" />
@@ -79,6 +79,10 @@ Abhängigkeiten werden automatisch über `platformio.ini` geladen.
 ---
 
 ## Changelog
+
+### v3.3 (2026-04-18)
+- Fix: Hi/Lo im Vollbild-Modus jetzt korrekt in gewählter Währung (EUR/CHF/USD)
+- Fix: 1H-Button ausgeblendet (API-Endpoint noch nicht implementiert, kommt später)
 
 ### v3.2 (2026-04-15)
 - 1H Chart-Periode hinzugefügt

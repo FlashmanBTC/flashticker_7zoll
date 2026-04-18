@@ -1,6 +1,6 @@
 {
   "name": "FLASHTICKER 7\"",
-  "version": "3.2",
+  "version": "3.3",
   "home_assistant_domain": "flashticker",
   "new_install_prompt_erase": true,
   "builds": [

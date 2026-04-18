@@ -643,6 +643,8 @@ void create_ui() {
       update_prices();
     }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
   }
+  // 1H ausgeblendet bis API-Endpoint implementiert ist
+  lv_obj_add_flag(g_btn_period[0], LV_OBJ_FLAG_HIDDEN);
 }
 
 // ============================================================
@@ -816,14 +818,21 @@ void update_fs_highlow() {
   calc_high_low(&hi, &lo);
   char buf[32];
   const char *sym = CUR_SYMBOL[g_cur];
-  // High/Low immer in USD aus Chart, daher kein Währungs-Offset – nur Label anpassen
+  // Chart-Daten sind immer in USD – Umrechnung über Preisverhältnis
+  float usd_price = (g_active_asset == ASSET_BTC)  ? g_btc[USD]
+                  : (g_active_asset == ASSET_GOLD)  ? g_gold[USD]
+                                                    : g_silver[USD];
+  float cur_price = (g_active_asset == ASSET_BTC)  ? g_btc[g_cur]
+                  : (g_active_asset == ASSET_GOLD)  ? g_gold[g_cur]
+                                                    : g_silver[g_cur];
+  float fx = (usd_price > 0.0f) ? (cur_price / usd_price) : 1.0f;
   if (hi > 0) {
-    fmt_price(buf, sizeof(buf), hi, sym, g_active_asset == ASSET_BTC ? 0 : 2);
+    fmt_price(buf, sizeof(buf), hi * fx, sym, g_active_asset == ASSET_BTC ? 0 : 2);
     char lbuf[48]; snprintf(lbuf, sizeof(lbuf), "Hi: %s", buf);
     lv_label_set_text(lbl_fs_high, lbuf);
   }
   if (lo > 0) {
-    fmt_price(buf, sizeof(buf), lo, sym, g_active_asset == ASSET_BTC ? 0 : 2);
+    fmt_price(buf, sizeof(buf), lo * fx, sym, g_active_asset == ASSET_BTC ? 0 : 2);
     char lbuf[48]; snprintf(lbuf, sizeof(lbuf), "Lo: %s", buf);
     lv_label_set_text(lbl_fs_low, lbuf);
   }
@@ -1151,13 +1160,13 @@ void load_settings() {
   prefs.begin("flashticker", true);
   g_def_asset      = prefs.getUChar("def_asset",    0);
   g_def_currency   = prefs.getUChar("def_currency", 0);
-  g_def_period     = prefs.getUChar("def_period",   0);
+  g_def_period     = prefs.getUChar("def_period",   1);
   g_def_fullscreen = prefs.getBool ("def_fs",       false);
   prefs.end();
   // Bounds-Check
   if (g_def_asset    > 2) g_def_asset    = 0;
   if (g_def_currency > 2) g_def_currency = 0;
-  if (g_def_period   > 3) g_def_period   = 1;
+  if (g_def_period == 0 || g_def_period > 3) g_def_period = 1;
   // Auf Runtime-Globals anwenden
   g_active_asset = (Asset)g_def_asset;
   g_cur          = (Currency)g_def_currency;
@@ -1317,6 +1326,8 @@ void show_settings_screen(lv_obj_t *prev_scr) {
       settings_highlight(s_period_btns, 4, idx);
     }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
   }
+  // 1H ausgeblendet bis API-Endpoint implementiert ist
+  lv_obj_add_flag(s_period_btns[0], LV_OBJ_FLAG_HIDDEN);
 
   // Zeile 3: Vollbild Start
   lv_obj_t *row3 = make_card(scr, 40, 360, 720, 82, 0x0F0F1E, true, false);
@@ -1594,6 +1605,7 @@ void setup() {
       const int total = NUM_ASSETS * NUM_PERIODS;
       int done = 0;
       for (uint8_t period = 0; period < NUM_PERIODS; period++) {
+        if (period == 0) { done += NUM_ASSETS; continue; }  // 1H: API noch nicht implementiert
         for (int a = 0; a < NUM_ASSETS; a++) {
           char msg[40];
           snprintf(msg, sizeof(msg), "Lade Charts: %d / %d", done + 1, total);
