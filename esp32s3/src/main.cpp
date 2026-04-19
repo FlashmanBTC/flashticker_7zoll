@@ -6,6 +6,14 @@
 //
 //  CHANGELOG
 //  ---------------------------------------------------------
+//  v3.4 (2026-04-19)
+//    - 1H Chart-Periode aktiviert (API-Backend jetzt verfügbar)
+//    - 4H Chart-Periode hinzugefügt
+//    - Live-Preis: aktualisiert alle 60s unabhängig vom 5-Min-Chart-Refresh
+//    - Fix: Uhrzeit friert nicht mehr ein während Chart/Preis-Updates
+//    - Fix: Chart-Periode 1H und 1M werden jetzt korrekt gespeichert
+//    - Fix: Boot-Defaults korrigiert → BTC, EUR, 1T, Vollbild AN
+//
 //  v3.3 (2026-04-18)
 //    - Hi/Lo Vollbild: zeigt jetzt korrekte Werte in gewählter Währung (EUR/CHF/USD)
 //    - 1H-Button temporär ausgeblendet (API liefert noch keine 1h-Daten)
@@ -54,7 +62,7 @@
 // ============================================================
 
 #define LGFX_USE_V1
-#define FW_VERSION "3.3"
+#define FW_VERSION "3.4"
 #include <Arduino.h>
 #include "Flashman_logo.h"
 #include <LovyanGFX.hpp>
@@ -198,25 +206,28 @@ float g_gold[3]={0}, g_gold_chg[3]={0};   // PAX Gold → 1 Token = 1 troy oz
 float g_silver[3]={0}, g_silver_chg[3]={}; // Kinesis Silver → 1 Token = 1 troy oz
 bool  g_data_ok = false;
 char          g_last_update[12] = "--:--";
-unsigned long g_last_fetch      = 0;
+unsigned long g_last_fetch       = 0;
+unsigned long g_last_price_fetch = 0;
 
-#define FETCH_EVERY_MS  (5UL*60UL*1000UL)
+#define FETCH_EVERY_MS        (5UL*60UL*1000UL)
+#define PRICE_FETCH_EVERY_MS  (60UL*1000UL)
 #define TROY_OZ_G       31.1035f
 
 // Chart-Daten: [Asset][Periode][Punkt]
 #define CHART_MAX_PTS  42
 #define NUM_ASSETS     3
-#define NUM_PERIODS    4  // 0=1H, 1=1T, 2=1W, 3=1M
+#define NUM_PERIODS    5  // 0=1H, 1=4H, 2=1T, 3=1W, 4=1M
 // Skalierungsdivisor pro Asset damit Werte in int16 passen (BTC >32767)
 static const int CHART_DIV[NUM_ASSETS] = { 10, 1, 1 };
 int16_t g_chart_data[NUM_ASSETS][NUM_PERIODS][CHART_MAX_PTS];
 uint8_t g_chart_cnt[NUM_ASSETS][NUM_PERIODS];
-uint8_t g_chart_period = 1;  // 0=1H, 1=1T, 2=1W, 3=1M (default 1T)
+uint8_t g_chart_period = 2;  // 0=1H, 1=4H, 2=1T, 3=1W, 4=1M (default 1T)
 
 // Periodenbasierte Änderung (aus Chart berechnet)
-float g_chg_h[NUM_ASSETS];  // 1H Änderung % je Asset
-float g_chg_w[NUM_ASSETS];  // 1W Änderung % je Asset
-float g_chg_m[NUM_ASSETS];  // 1M Änderung % je Asset
+float g_chg_h[NUM_ASSETS];   // 1H Änderung % je Asset
+float g_chg_4h[NUM_ASSETS];  // 4H Änderung % je Asset
+float g_chg_w[NUM_ASSETS];   // 1W Änderung % je Asset
+float g_chg_m[NUM_ASSETS];   // 1M Änderung % je Asset
 
 WiFiUDP    ntpUDP;
 NTPClient  ntpClient(ntpUDP, "pool.ntp.org", 3600);
@@ -232,7 +243,7 @@ Asset g_b2_asset     = ASSET_SILVER;
 // Boot-Defaults (NVS gespeichert, gelten ab naechstem Start)
 uint8_t g_def_asset      = 0;  // 0=BTC, 1=Gold, 2=Silber
 uint8_t g_def_currency   = 0;  // 0=EUR, 1=CHF, 2=USD
-uint8_t g_def_period     = 1;  // 0=1H, 1=1T, 2=1W, 3=1M
+uint8_t g_def_period     = 2;  // 0=1H, 1=4H, 2=1T, 3=1W, 4=1M
 bool    g_def_fullscreen = false;
 
 // ============================================================
@@ -260,7 +271,7 @@ lv_obj_t *lbl_time, *lbl_date;
 lv_obj_t *lbl_status;
 lv_obj_t *g_chart;
 lv_chart_series_t *g_chart_ser;
-lv_obj_t *g_btn_period[4];
+lv_obj_t *g_btn_period[5];
 lv_obj_t *g_btn_cur[3];
 
 // Top-Card (dynamisch)
@@ -618,11 +629,11 @@ void create_ui() {
   lv_obj_align(lbl_sep, LV_ALIGN_RIGHT_MID, -192, 0);
 
   // ---------- Perioden-Buttons in Status Bar ----------
-  const char* per_labels[] = {"1H", "1T", "1W", "1M"};
+  const char* per_labels[] = {"1H", "4H", "1T", "1W", "1M"};
   for (int i = 0; i < NUM_PERIODS; i++) {
     g_btn_period[i] = lv_btn_create(status_bar);
     lv_obj_set_size(g_btn_period[i], 44, 26);
-    lv_obj_align(g_btn_period[i], LV_ALIGN_RIGHT_MID, -212 - (3-i) * 50, 0);
+    lv_obj_align(g_btn_period[i], LV_ALIGN_RIGHT_MID, -212 - (4-i) * 50, 0);
     lv_obj_set_style_radius(g_btn_period[i], 4, 0);
     lv_obj_set_style_pad_all(g_btn_period[i], 0, 0);
     bool pactive = (i == (int)g_chart_period);
@@ -647,8 +658,6 @@ void create_ui() {
       update_prices();
     }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
   }
-  // 1H ausgeblendet bis API-Endpoint implementiert ist
-  lv_obj_add_flag(g_btn_period[0], LV_OBJ_FLAG_HIDDEN);
 }
 
 // ============================================================
@@ -664,10 +673,11 @@ void update_prices() {
 
   // Periodenbasierte Änderung wählen (24h aus API, 1W/1M aus Chart)
   auto get_chg = [&](Asset a) -> float {
-    if (g_chart_period == 0) return g_chg_h[a];   // 1H
-    if (g_chart_period == 2) return g_chg_w[a];   // 1W
-    if (g_chart_period == 3) return g_chg_m[a];   // 1M
-    // 1T (period 1): per-currency 24h aus Chart
+    if (g_chart_period == 0) return g_chg_h[a];    // 1H
+    if (g_chart_period == 1) return g_chg_4h[a];   // 4H
+    if (g_chart_period == 3) return g_chg_w[a];    // 1W
+    if (g_chart_period == 4) return g_chg_m[a];    // 1M
+    // 1T (period 2): per-currency 24h aus Chart
     if (a == ASSET_BTC)    return g_btc_chg[c];
     if (a == ASSET_GOLD)   return g_gold_chg[c];
     return g_silver_chg[c];
@@ -1164,13 +1174,13 @@ void load_settings() {
   prefs.begin("flashticker", true);
   g_def_asset      = prefs.getUChar("def_asset",    0);
   g_def_currency   = prefs.getUChar("def_currency", 0);
-  g_def_period     = prefs.getUChar("def_period",   1);
-  g_def_fullscreen = prefs.getBool ("def_fs",       false);
+  g_def_period     = prefs.getUChar("def_period",   2);
+  g_def_fullscreen = prefs.getBool ("def_fs",       true);
   prefs.end();
   // Bounds-Check
   if (g_def_asset    > 2) g_def_asset    = 0;
   if (g_def_currency > 2) g_def_currency = 0;
-  if (g_def_period == 0 || g_def_period > 3) g_def_period = 1;
+  if (g_def_period > 4) g_def_period = 2;
   // Auf Runtime-Globals anwenden
   g_active_asset = (Asset)g_def_asset;
   g_cur          = (Currency)g_def_currency;
@@ -1200,7 +1210,7 @@ void save_settings() {
 // ============================================================
 static lv_obj_t *s_asset_btns[3];
 static lv_obj_t *s_cur_btns[3];
-static lv_obj_t *s_period_btns[4];
+static lv_obj_t *s_period_btns[5];
 static lv_obj_t *s_fs_btns[2];
 
 static void settings_highlight(lv_obj_t **btns, int count, int active) {
@@ -1319,19 +1329,17 @@ void show_settings_screen(lv_obj_t *prev_scr) {
   lv_obj_set_style_text_color(lbl2, lv_color_hex(0xAAAAAA), 0);
   lv_obj_set_style_text_font(lbl2, &lv_font_montserrat_18, 0);
   lv_obj_align(lbl2, LV_ALIGN_LEFT_MID, 20, 0);
-  const char *period_labels[] = {"1H", "1T", "1W", "1M"};
-  for (int i = 0; i < 4; i++) {
+  const char *period_labels[] = {"1H", "4H", "1T", "1W", "1M"};
+  for (int i = 0; i < 5; i++) {
     s_period_btns[i] = make_sbtn(row2, period_labels[i],
-      LV_ALIGN_RIGHT_MID, -16 - (3-i)*106, i == (int)g_def_period);
+      LV_ALIGN_RIGHT_MID, -16 - (4-i)*106, i == (int)g_def_period);
     lv_obj_add_event_cb(s_period_btns[i], [](lv_event_t *e) {
       uint8_t idx = (uint8_t)(uintptr_t)lv_event_get_user_data(e);
       g_def_period = idx;
       save_settings();
-      settings_highlight(s_period_btns, 4, idx);
+      settings_highlight(s_period_btns, 5, idx);
     }, LV_EVENT_CLICKED, (void*)(uintptr_t)i);
   }
-  // 1H ausgeblendet bis API-Endpoint implementiert ist
-  lv_obj_add_flag(s_period_btns[0], LV_OBJ_FLAG_HIDDEN);
 
   // Zeile 3: Vollbild Start
   lv_obj_t *row3 = make_card(scr, 40, 360, 720, 82, 0x0F0F1E, true, false);
@@ -1402,7 +1410,10 @@ void fetch_chart_asset(Asset a, uint8_t period) {
   char url[128];
 
   const char *asset_str  = (a == ASSET_BTC) ? "BTC" : (a == ASSET_GOLD) ? "XAU" : "XAG";
-  const char *period_str = (period == 1) ? "1d" : (period == 2) ? "1w" : (period == 3) ? "1m" : "1h";
+  const char *period_str = (period == 0) ? "1h" :
+                           (period == 1) ? "4h" :
+                           (period == 2) ? "1d" :
+                           (period == 3) ? "1w" : "1m";
 
   snprintf(url, sizeof(url), "https://ticker.blitzi.me/history/%s/USD/%s",
            asset_str, period_str);
@@ -1439,16 +1450,18 @@ void fetch_chart_asset(Asset a, uint8_t period) {
     int16_t last  = g_chart_data[a][period][n - 1];
     float chg = (first != 0) ? ((float)(last - first) / first * 100.0f) : 0.0f;
     if (period == 0) {
-      g_chg_h[a] = chg;  // 1H Änderung
+      g_chg_h[a] = chg;   // 1H Änderung
     } else if (period == 1) {
+      g_chg_4h[a] = chg;  // 4H Änderung
+    } else if (period == 2) {
       // 1T: 24h-Change in alle Währungsslots schreiben
       if (a == ASSET_BTC)    { g_btc_chg[EUR]    = g_btc_chg[CHF]    = g_btc_chg[USD]    = chg; }
       if (a == ASSET_GOLD)   { g_gold_chg[EUR]   = g_gold_chg[CHF]   = g_gold_chg[USD]   = chg; }
       if (a == ASSET_SILVER) { g_silver_chg[EUR] = g_silver_chg[CHF] = g_silver_chg[USD] = chg; }
-    } else if (period == 2) {
-      g_chg_w[a] = chg;  // 1W Änderung
+    } else if (period == 3) {
+      g_chg_w[a] = chg;   // 1W Änderung
     } else {
-      g_chg_m[a] = chg;  // 1M Änderung
+      g_chg_m[a] = chg;   // 1M Änderung
     }
     Serial.printf("%s Änderung P%d: %.2f%%\n", asset_str, period, chg);
   }
@@ -1457,11 +1470,30 @@ void fetch_chart_asset(Asset a, uint8_t period) {
 // ============================================================
 //  Chart: Alle 3 Assets für eine Periode laden
 // ============================================================
+static void update_clock() {
+  if (WiFi.status() != WL_CONNECTED) return;
+  char tbuf[12];
+  snprintf(tbuf, sizeof(tbuf), "%02d:%02d:%02d",
+           ntpClient.getHours(), ntpClient.getMinutes(), ntpClient.getSeconds());
+  lv_label_set_text(lbl_time, tbuf);
+  const char* days[]   = {"Sonntag","Montag","Dienstag","Mittwoch",
+                           "Donnerstag","Freitag","Samstag"};
+  const char* months[] = {"","Januar","Februar","Maerz","April","Mai","Juni",
+                           "Juli","August","September","Oktober","November","Dezember"};
+  time_t raw = ntpClient.getEpochTime();
+  struct tm *t = gmtime(&raw);
+  char dbuf[40];
+  snprintf(dbuf, sizeof(dbuf), "%s, %02d. %s %04d",
+           days[t->tm_wday], t->tm_mday, months[t->tm_mon+1], t->tm_year+1900);
+  lv_label_set_text(lbl_date, dbuf);
+}
+
 void fetch_all_charts(uint8_t period) {
   lv_label_set_text(lbl_status, "Lade Charts...");
   lv_timer_handler();
   for (int a = 0; a < NUM_ASSETS; a++) {
     fetch_chart_asset((Asset)a, period);
+    update_clock();
     lv_timer_handler();
   }
   update_chart_series();
@@ -1609,7 +1641,6 @@ void setup() {
       const int total = NUM_ASSETS * NUM_PERIODS;
       int done = 0;
       for (uint8_t period = 0; period < NUM_PERIODS; period++) {
-        if (period == 0) { done += NUM_ASSETS; continue; }  // 1H: API noch nicht implementiert
         for (int a = 0; a < NUM_ASSETS; a++) {
           char msg[40];
           snprintf(msg, sizeof(msg), "Lade Charts: %d / %d", done + 1, total);
@@ -1689,12 +1720,22 @@ void loop() {
     }
   }
 
-  // Kurse alle 5 Minuten aktualisieren
+  // Live-Preis alle 60s aktualisieren (unabhängig vom Chart-Refresh)
+  if (g_data_ok && millis() - g_last_price_fetch >= PRICE_FETCH_EVERY_MS) {
+    g_last_price_fetch = millis();
+    fetchPrices();
+    update_prices();
+    update_clock();
+    lv_timer_handler();
+  }
+
+  // Kurse + Charts alle 5 Minuten komplett aktualisieren
   if (g_data_ok && millis() - g_last_fetch >= FETCH_EVERY_MS) {
     lv_label_set_text(lbl_status, "Aktualisiere Kurse...");
     lv_timer_handler();
     if (fetchPrices()) {
-      g_last_fetch = millis();
+      g_last_fetch        = millis();
+      g_last_price_fetch  = millis();
       snprintf(g_last_update, sizeof(g_last_update),
                "%02d:%02d", ntpClient.getHours(), ntpClient.getMinutes());
       for (uint8_t p = 0; p < NUM_PERIODS; p++) fetch_all_charts(p);  // alle Perioden neu laden
